@@ -23,6 +23,7 @@ myApp/
 │  │  └─ server.go                  # http.Server с таймаутами
 │  ├─ core/
 │  │  ├─ config.go                  # ENV-конфиг, проверки для prod
+│  │  ├─ ctx.go                     # тип ключей контекста (чтобы избежать коллизий)
 │  │  ├─ errors.go                  # AppError, фабрики (BadRequest, Internal)
 │  │  ├─ response.go                # JSON(), Fail() (RFC7807)
 │  │  └─ logfile.go                 # JSON-логи с ротацией (7 дней)
