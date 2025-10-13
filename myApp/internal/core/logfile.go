@@ -1,5 +1,6 @@
 package core
 
+//logfile.go
 import (
 	"encoding/json"
 	"io"
@@ -11,19 +12,20 @@ import (
 	"time"
 )
 
-// Logger — глобальный логгер.
+// Logger управляет файлами логов с ротацией
 type Logger struct {
-	mainFile  *os.File
-	errorFile *os.File
-	mu        sync.Mutex
+	mainFile  *os.File   // Файл для основных логов
+	errorFile *os.File   // Файл для ошибок
+	mu        sync.Mutex // Синхронизация доступа к файлам
 }
 
 var globalLogger *Logger
 
-// InitDailyLog инициализирует лог-файлы с ротацией (OWASP A09).
+// InitDailyLog инициализирует ротацию логов, создавая новые файлы на основе текущей даты (OWASP A09: Security Logging and Monitoring Failures)
 func InitDailyLog() {
+	// Создаёт директорию для логов, если не существует
 	if err := os.MkdirAll("logs", 0755); err != nil {
-		log.Printf("Failed to create logs directory: %v", err)
+		log.Printf("Ошибка создания директории логов: %v", err)
 		return
 	}
 
@@ -31,15 +33,17 @@ func InitDailyLog() {
 	mainPath := filepath.Join("logs", dateStr+".log")
 	errPath := filepath.Join("logs", "errors-"+dateStr+".log")
 
+	// Открывает файл для основных логов
 	mainFile, err := os.OpenFile(mainPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Printf("Failed to open main log file: %v", err)
+		log.Printf("Ошибка открытия основного лог-файла: %v", err)
 		return
 	}
 
+	// Открывает файл для ошибок
 	errorFile, err := os.OpenFile(errPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Printf("Failed to open error log file: %v", err)
+		log.Printf("Ошибка открытия файла ошибок: %v", err)
 		_ = mainFile.Close()
 		return
 	}
@@ -49,38 +53,41 @@ func InitDailyLog() {
 		errorFile: errorFile,
 	}
 
-	// Единственный writer, который маршрутизирует по уровням.
+	// Настраивает логгер для маршрутизации сообщений
 	log.SetOutput(newLevelSplitWriter(mainFile, errorFile, os.Stdout))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	log.Println("=== New log file initialized ===")
+	log.Println("=== Новый лог-файл инициализирован ===")
 
+	// Запускает очистку старых логов
 	go cleanupOldLogs("logs", 7)
 }
 
-// levelSplitWriter направляет ERROR в errors-*.log, остальное — в обычный лог.
-// Всегда дублирует в stdout. Без рекурсивного логирования внутри.
+// levelSplitWriter разделяет логи по уровням: ошибки в errors-*.log, остальное в основной лог, дублируя в stdout
 type levelSplitWriter struct {
-	mainW io.Writer
-	errW  io.Writer
-	outW  io.Writer
-	mu    sync.Mutex
+	mainW io.Writer  // Основной лог-файл
+	errW  io.Writer  // Файл ошибок
+	outW  io.Writer  // Вывод в stdout
+	mu    sync.Mutex // Синхронизация записи
 }
 
+// newLevelSplitWriter создаёт новый levelSplitWriter с указанными писателями
 func newLevelSplitWriter(mainW, errW, outW io.Writer) *levelSplitWriter {
 	return &levelSplitWriter{mainW: mainW, errW: errW, outW: outW}
 }
 
+// Write записывает лог-сообщение, направляя его в соответствующий файл на основе уровня
 func (w *levelSplitWriter) Write(p []byte) (int, error) {
 	level := detectLevel(p)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Всегда в stdout (не критично, если он nil)
+	// Дублирует вывод в stdout, если он доступен
 	if w.outW != nil {
 		_, _ = w.outW.Write(p)
 	}
 
+	// Направляет сообщение в соответствующий файл
 	switch level {
 	case "ERROR":
 		if w.errW != nil {
@@ -91,15 +98,15 @@ func (w *levelSplitWriter) Write(p []byte) (int, error) {
 			return w.mainW.Write(p)
 		}
 	}
-	// Если оба отсутствуют — "успешная" запись нулём байт.
+	// Возвращает успешную запись, если файлы недоступны
 	return len(p), nil
 }
 
-// detectLevel пытается определить уровень из JSON {"level":"ERROR"} или по текстовым индикаторам.
+// detectLevel определяет уровень лога из сообщения (JSON или текст)
 func detectLevel(p []byte) string {
 	s := strings.TrimSpace(string(p))
 
-	// Попытка разобрать как JSON лог, который пишет LogError.
+	// Проверяет JSON-формат лога
 	if strings.HasPrefix(s, "{") && strings.Contains(s, `"level"`) {
 		var tmp struct {
 			Level string `json:"level"`
@@ -109,12 +116,13 @@ func detectLevel(p []byte) string {
 		}
 	}
 
-	// Текстовые индикаторы
+	// Проверяет текстовые индикаторы уровня
 	ss := strings.ToUpper(s)
 	if strings.Contains(ss, `"LEVEL":"ERROR"`) ||
 		strings.Contains(ss, " ERROR ") ||
 		strings.HasPrefix(ss, "ERROR ") ||
 		strings.Contains(ss, "ERROR:") ||
+		strings.HasPrefix(ss, "ERROR:") ||
 		strings.Contains(ss, " LEVEL=ERROR") ||
 		strings.Contains(ss, " LEVEL=ERR") {
 		return "ERROR"
@@ -123,10 +131,10 @@ func detectLevel(p []byte) string {
 	return "INFO"
 }
 
-// LogError записывает ошибку в JSON (OWASP A09).
+// LogError записывает сообщение об ошибке в формате JSON (OWASP A09)
 func LogError(msg string, fields map[string]interface{}) {
 	if globalLogger == nil {
-		log.Printf("ERROR: Logger not initialized: %s, fields: %v", msg, fields)
+		log.Printf("ERROR: Логгер не инициализирован: %s, поля: %v", msg, fields)
 		return
 	}
 
@@ -138,18 +146,18 @@ func LogError(msg string, fields map[string]interface{}) {
 	}
 	logData, err := json.Marshal(logEntry)
 	if err != nil {
-		log.Printf("ERROR: Failed to marshal log entry: %v", err)
+		log.Printf("ERROR: Ошибка сериализации лога: %v", err)
 		return
 	}
 
 	log.Println(string(logData))
 }
 
-// cleanupOldLogs удаляет старые логи (OWASP A09).
+// cleanupOldLogs удаляет лог-файлы старше указанного количества дней (OWASP A09)
 func cleanupOldLogs(dir string, maxAgeDays int) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		log.Printf("ERROR: Failed to read logs directory: %v", err)
+		log.Printf("ERROR: Ошибка чтения директории логов: %v", err)
 		return
 	}
 
@@ -160,19 +168,19 @@ func cleanupOldLogs(dir string, maxAgeDays int) {
 		}
 		info, err := file.Info()
 		if err != nil {
-			log.Printf("ERROR: Failed to get file info for %s: %v", file.Name(), err)
+			log.Printf("ERROR: Ошибка получения информации о файле %s: %v", file.Name(), err)
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(dir, file.Name())
 			if err := os.Remove(path); err != nil {
-				log.Printf("ERROR: Failed to remove old log %s: %v", path, err)
+				log.Printf("ERROR: Ошибка удаления старого лога %s: %v", path, err)
 			}
 		}
 	}
 }
 
-// Close закрывает файлы логов (OWASP A09).
+// Close закрывает файлы логов, обеспечивая корректное завершение (OWASP A09)
 func Close() {
 	if globalLogger != nil {
 		globalLogger.mu.Lock()

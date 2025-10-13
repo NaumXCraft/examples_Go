@@ -1,6 +1,6 @@
 package core
 
-// response.go
+//response.go
 import (
 	"encoding/json"
 	"net/http"
@@ -8,32 +8,32 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// JSON отправляет JSON-ответ (OWASP A09).
+// JSON отправляет JSON-ответ с указанным статусом HTTP (OWASP A09: Security Logging and Monitoring Failures)
 func JSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		LogError("JSON encoding failed", map[string]interface{}{"error": err.Error()})
+		LogError("Ошибка кодирования JSON", map[string]interface{}{"error": err.Error()})
 	}
 }
 
-// NoContent отправляет HTTP 204.
+// NoContent отправляет ответ с HTTP 204 (No Content)
 func NoContent(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ProblemDetail — RFC7807 для ошибок API (OWASP A04).
+// ProblemDetail определяет структуру ответа об ошибке в формате RFC 7807 (OWASP A04: Design Flaws)
 type ProblemDetail struct {
-	Type     string            `json:"type"`
-	Title    string            `json:"title"`
-	Status   int               `json:"status"`
-	Detail   string            `json:"detail"`
-	Instance string            `json:"instance"`
-	Code     string            `json:"code"`
-	Fields   map[string]string `json:"fields,omitempty"`
+	Type     string            `json:"type"`             // Тип ошибки (URI)
+	Title    string            `json:"title"`            // Название HTTP-статуса
+	Status   int               `json:"status"`           // HTTP-статус
+	Detail   string            `json:"detail"`           // Детали ошибки
+	Instance string            `json:"instance"`         // Путь запроса
+	Code     string            `json:"code"`             // Машинный код ошибки
+	Fields   map[string]string `json:"fields,omitempty"` // Поля с ошибками (для валидации)
 }
 
-// Fail отправляет RFC7807-ответ (OWASP A04, A09).
+// Fail отправляет ответ об ошибке в формате RFC 7807 и логирует её (OWASP A04, A09)
 func Fail(w http.ResponseWriter, r *http.Request, err error) {
 	ae := From(err)
 	requestID := middleware.GetReqID(r.Context())
@@ -46,7 +46,7 @@ func Fail(w http.ResponseWriter, r *http.Request, err error) {
 		"fields":     ae.Fields,
 		"error":      ae.Err,
 	}
-	LogError("Request failed", logFields)
+	LogError("Ошибка обработки запроса", logFields)
 
 	problem := ProblemDetail{
 		Type:     "/errors/" + ae.Code,

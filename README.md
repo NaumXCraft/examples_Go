@@ -17,11 +17,11 @@
 myApp/
 ├─ cmd/
 │  └─ app/
-│     └─ main.go                    # Точка входа: конфиг, логи, graceful shutdown, запуск app.New()
+│     └─ main.go    # Точка входа приложения: загружает конфиг, инициализирует логи и CSRF, 
+│                    создаёт и запускает HTTP-сервер, ожидает сигнал завершения и выполняет graceful shutdown
 ├─ internal/
 │  ├─ app/
 │  │  ├─ app.go                     # Сборка: chi.Router, middleware, статика, маршруты, 404
-│  │  └─ server.go                  # http.Server с таймаутами
 │  ├─ core/
 │  │  ├─ config.go                  # ENV-конфиг, проверки для prod
 │  │  ├─ ctx.go                     # тип ключей контекста (чтобы избежать коллизий)

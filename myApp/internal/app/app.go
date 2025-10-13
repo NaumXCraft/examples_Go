@@ -1,11 +1,11 @@
 package app
 
+//app.go
 import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"net/http"
-	"time"
 
 	"myApp/internal/core"
 	"myApp/internal/http/handler"
@@ -17,8 +17,9 @@ import (
 	"github.com/gorilla/csrf"
 )
 
-// собирает приложение (OWASP A05).
+// New инициализирует HTTP-роутер с middleware и маршрутами приложения
 func New(cfg core.Config, csrfKey []byte) (http.Handler, error) {
+	// Инициализирует шаблонизатор для рендеринга HTML
 	tpl, err := view.New()
 	if err != nil {
 		return nil, err
@@ -26,34 +27,37 @@ func New(cfg core.Config, csrfKey []byte) (http.Handler, error) {
 
 	r := chi.NewRouter()
 
-	// Генерируем nonce на КАЖДЫЙ запрос и кладём в контекст.
+	// Добавляет nonce в контекст каждого запроса для Content Security Policy
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			nonce, err := generateNonce()
 			if err != nil {
-				core.LogError("Failed to generate nonce", map[string]interface{}{"error": err.Error()})
-				nonce = ""
+				core.LogError("Ошибка генерации nonce", map[string]interface{}{"error": err.Error()})
+				core.Fail(w, r, core.Internal("Ошибка генерации nonce", err))
+				return
 			}
 			ctx := context.WithValue(r.Context(), core.CtxNonce, nonce)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	})
 
-	// Middleware
-	r.Use(mw.TrustedProxy([]string{"127.0.0.1", "::1"}))
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(15 * time.Second))
+	// Применяет middleware для обработки запросов
+	r.Use(mw.TrustedProxy([]string{"127.0.0.1", "::1"})) // Ограничивает доверенные прокси
+	r.Use(middleware.RequestID)                          // Добавляет уникальный ID запроса
+	r.Use(middleware.RealIP)                             // Определяет реальный IP клиента
+	r.Use(middleware.Logger)                             // Логирует запросы
+	r.Use(middleware.Recoverer)                          // Восстанавливает после паники
+	r.Use(middleware.Timeout(cfg.RequestTimeout))        // Ограничивает время выполнения запроса
 
-	// Secure headers теперь берёт nonce из контекста (см. пункт 3).
+	// Добавляет заголовки безопасности (CSP, X-Frame-Options и др.)
 	r.Use(mw.SecureHeaders())
 
+	// Включает HSTS для продакшен-среды, если HTTPS включён
 	if cfg.Secure {
 		r.Use(mw.HSTS(cfg.Env == "prod"))
 	}
 
+	// Настраивает CSRF-защиту для форм
 	r.Use(csrf.Protect(
 		csrfKey,
 		csrf.Secure(cfg.Secure),
@@ -61,14 +65,15 @@ func New(cfg core.Config, csrfKey []byte) (http.Handler, error) {
 		csrf.HttpOnly(true),
 		csrf.Path("/"),
 	))
-	if !cfg.Secure {
-		core.LogError("CSRF running without HTTPS in non-prod", nil)
+	// Логирует предупреждение, если CSRF используется без HTTPS в не-продакшен среде
+	if !cfg.Secure && cfg.Env != "prod" {
+		core.LogError("CSRF работает без HTTPS в не-продакшен среде", nil)
 	}
 
-	// Статические файлы (кэш в NGINX)
+	// Обслуживает статические файлы из директории web/assets
 	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.Dir("web/assets"))))
 
-	// Роуты
+	// Регистрирует маршруты приложения
 	r.Get("/", handler.Home(tpl))
 	r.Get("/about", handler.About(tpl))
 	r.Get("/form", handler.FormIndex(tpl))
@@ -79,7 +84,7 @@ func New(cfg core.Config, csrfKey []byte) (http.Handler, error) {
 	return r, nil
 }
 
-// generateNonce создаёт nonce для CSP (OWASP).
+// generateNonce создаёт случайный nonce для Content Security Policy (OWASP A05)
 func generateNonce() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
