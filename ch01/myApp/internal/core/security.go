@@ -1,7 +1,6 @@
 package core
 
 // security.go — отвечает за установку безопасных HTTP-заголовков.
-// Включает Content-Security-Policy (CSP) с nonce, HSTS и другие меры защиты.
 
 import (
 	"github.com/gin-gonic/gin"
@@ -10,93 +9,104 @@ import (
 // -----------------------------------------------------------
 // SecureHeaders — middleware: CSP с nonce + безопасные заголовки
 // -----------------------------------------------------------
-//
-// Устанавливает основные защитные заголовки:
-//
-//  • Content-Security-Policy (CSP) — ограничивает источники JS, CSS, изображений.
-//  • X-Content-Type-Options: nosniff — блокирует MIME-type sniffing.
-//  • X-Frame-Options: DENY — запрещает встраивание страницы в iframe.
-//  • Referrer-Policy — управляет передачей заголовка Referer.
-//  • Permissions-Policy — запрещает доступ к камере, микрофону, геолокации и т.д.
-//
-// CSP использует nonce (одноразовый ключ на каждый запрос), чтобы разрешить
-// выполнение только тех inline-стилей/скриптов, у которых атрибут nonce совпадает.
 
 func SecureHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Извлекаем nonce из контекста запроса.
-		nonce, ok := c.Request.Context().Value(CtxNonce).(string)
-		if !ok || nonce == "" {
-			// Если nonce не найден — это ошибка и потенциально небезопасное состояние.
-			FailC(c, Internal("Nonce не найден", nil))
-			return
-		}
-
-		// Формируем Content-Security-Policy.
-		// Разрешаем только:
-		//   - свои ресурсы ('self')
-		//   - data: для изображений и шрифтов
-		//   - jsdelivr.net для внешних библиотек (CSS/JS/шрифты)
-		//   - инлайн-скрипты/стили только с nonce, выданным для этого запроса.
-		csp := "default-src 'self'; " +
-			"img-src 'self' data:; " + // изображения только локальные или data:
-			"style-src 'self' https://cdn.jsdelivr.net 'nonce-" + nonce + "'; " + // стили из jsdelivr и с nonce
-			"script-src 'self' https://cdn.jsdelivr.net 'nonce-" + nonce + "'; " + // JS — локально, CDN, с nonce
-			"font-src 'self' https://cdn.jsdelivr.net data:; " + // шрифты локальные, CDN, data:
-			"connect-src 'self' https://cdn.jsdelivr.net; " + // разрешены запросы к jsdelivr (напр. sourcemaps)
-			"form-action 'self'; " + // формы можно отправлять только на свой домен
-			"frame-ancestors 'none'; " + // запрещаем встраивание в iframe
-			"base-uri 'self'" // запрет подмены <base href>
-
-		// Устанавливаем заголовки безопасности.
-		c.Writer.Header().Set("Content-Security-Policy", csp)
-
-		// Блокирует попытки браузера угадать MIME-тип (XSS-защита).
 		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
-
-		// Запрещает встраивать сайт в iframe (Clickjacking-защита).
-		c.Writer.Header().Set("X-Frame-Options", "DENY")
-
-		// Управляет передачей Referer: будет отправляться только домен и протокол.
 		c.Writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-
-		// Ограничивает доступ к чувствительным возможностям браузера.
-		c.Writer.Header().Set("Permissions-Policy",
-			"camera=(), microphone=(), geolocation=(), payment=()")
-
-		// Передаём управление дальше.
+		c.Writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 		c.Next()
 	}
 }
 
-// -----------------------------------------------------------
-// HSTS — включает Strict-Transport-Security для HTTPS
-// -----------------------------------------------------------
+// CSP возвращает middleware для установки заголовка Content-Security-Policy.
+// CSP — это система защиты браузера от XSS, инъекций скриптов и стилей.
+// Она говорит браузеру: "Разреши загружать только то, что я укажу".
 //
-// HSTS (HTTP Strict Transport Security) заставляет браузер всегда
-// использовать HTTPS при повторных запросах на домен.
+// Как работает:
+// 1. На каждый запрос генерируется nonce (случайная строка).
+// 2. Nonce кладётся в контекст и в CSP-политику.
+// 3. В HTML вставляем <script nonce="..."> или <style nonce="..."> — только они работают.
+// 4. Всё остальное (инлайн style="", внешние скрипты без разрешения) — блокируется.
 //
-//  • Работает ТОЛЬКО при secure-режиме (в продакшене).
-//  • "max-age=31536000" — браузер будет помнить правило 1 год.
-//  • "includeSubDomains" — правило распространяется на поддомены.
+// Директивы (настройки):
+//   default-src      — что разрешено по умолчанию
+//   style-src        — откуда стили (файлы, инлайн)
+//   script-src       — откуда скрипты
+//   img-src          — картинки
+//   font-src         — шрифты
+//   object-src       — плагины (flash и т.п.)
+//   frame-ancestors  — кто может вставить нас в <iframe>
+//   base-uri         — откуда <base>
 //
-// При dev-режиме (без HTTPS) этот заголовок не устанавливается,
-// чтобы не мешать локальной отладке.
+// Значения:
+//   'self'           — только с нашего домена
+//   'none'           — ничего
+//   https://cdn...   — конкретный внешний источник
+//   'nonce-ABC123'   — только с этим nonce
+//   data:            — data-uri (например, base64-картинки)
+//
+// --- ВАРИАНТ 1: БАЗОВЫЙ (БЕЗОПАСНЫЙ, КАК СЕЙЧАС) ---
 
-func HSTS(isProduction bool) gin.HandlerFunc {
+func CSPBasic() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !isProduction {
-			// В режиме разработки ничего не добавляем.
-			c.Next()
-			return
-		}
+		nonce, _ := c.Request.Context().Value(CtxNonce).(string)
 
-		// Устанавливаем HSTS только при HTTPS в продакшене.
-		c.Writer.Header().Set(
-			"Strict-Transport-Security",
-			"max-age=31536000; includeSubDomains",
-		)
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; "+
+				"base-uri 'self'; "+
+				"object-src 'none'; "+
+				"frame-ancestors 'none'; "+
+				"style-src 'self' https://cdn.jsdelivr.net 'nonce-"+nonce+"'; "+
+				"script-src 'self' https://cdn.jsdelivr.net 'nonce-"+nonce+"'; "+
+				"img-src 'self' data: https://cdn.jsdelivr.net; "+
+				"font-src 'self' https://cdn.jsdelivr.net; ")
+		c.Next()
+	}
+}
 
+// --- ВАРИАНТ 2: РАЗРЕШИТЬ ВСЕ ИНЛАЙН СТИЛИ (НЕБЕЗОПАСНО!) ---
+// Добавляем 'unsafe-inline' — браузер разрешит style="..."
+// НО: это ослабляет защиту! Используй только для тестов.
+
+func CSPAllowInlineStyles() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		nonce, _ := c.Request.Context().Value(CtxNonce).(string)
+
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; "+
+				"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net 'nonce-"+nonce+"'; "+ // ← 'unsafe-inline'
+				"script-src 'self' 'nonce-"+nonce+"'; "+
+				"img-src 'self' data:; ")
+		c.Next()
+	}
+}
+
+// --- ВАРИАНТ 3: СТРОГИЙ — ТОЛЬКО СВОИ РЕСУРСЫ, БЕЗ CDN ---
+// Никаких внешних библиотек. Только локальные файлы и nonce.
+
+func CSPStrictLocalOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		nonce, _ := c.Request.Context().Value(CtxNonce).(string)
+
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; "+
+				"style-src 'self' 'nonce-"+nonce+"'; "+ // только свои CSS и nonce
+				"script-src 'self' 'nonce-"+nonce+"'; "+ // только свои JS и nonce
+				"img-src 'self' data:; "+ // картинки только с сервера или data:
+				"font-src 'self'; "+ // шрифты только свои
+				"object-src 'none'; "+
+				"frame-ancestors 'none'; ")
+		c.Next()
+	}
+}
+
+// --- ВАРИАНТ 4: ДЛЯ РАЗРАБОТКИ — ОТКЛЮЧИТЬ CSP СОВСЕМ ---
+// Внимание: НЕ ИСПОЛЬЗУЙ В ПРОДАКШЕНЕ!
+
+func CSPDisabled() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Ничего не ставим — CSP не будет
 		c.Next()
 	}
 }

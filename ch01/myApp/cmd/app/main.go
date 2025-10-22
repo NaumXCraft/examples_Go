@@ -52,7 +52,7 @@ func main() {
 	// Используется для защиты форм и сессий
 	csrfKey := deriveSecureKey(cfg.CSRFKey)
 
-	// Инициализируем приложение (Gin, middleware, маршруты)
+	// Инициализируем приложение internal/app/app.go (Gin, middleware, routes, CSP nonce, CSRF-защиту, Раздаёт статику /assets из web/assets)
 	handler, err := app.New(cfg, db, csrfKey)
 	if err != nil {
 		core.LogError("Ошибка app.New", map[string]interface{}{"error": err})
@@ -116,7 +116,6 @@ func deriveSecureKey(secret string) []byte {
 		// Если в конфиге нет ключа — генерируем случайный
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
-			// Сюда почти никогда не попадём (rand.Read редко падает)
 			panic("unable to generate random bytes: " + err.Error())
 		}
 		return b
