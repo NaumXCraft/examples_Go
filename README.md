@@ -4,6 +4,7 @@
 - ch01 учебный, но продакшен-готовый boilerplate-проект на **Go 1.25.1 за NGINX**."
 - ch02 "Games"
 - ch03 "Examples"
+- ch04 File Box
 
 
 

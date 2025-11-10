@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Файлообменник с папками</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f4f4f4; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        .path { margin: 15px 0; font-family: monospace; color: #555; }
+        .path a { color: #007bff; text-decoration: none; }
+        .path a:hover { text-decoration: underline; }
+        .upload-area { border: 2px dashed #ccc; padding: 30px; text-align: center; margin: 20px 0; border-radius: 8px; }
+        .upload-area.dragover { border-color: #007bff; background: #f0f8ff; }
+        .actions { margin: 15px 0; }
+        .btn { padding: 8px 16px; margin: 0 5px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-small { padding: 4px 8px; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; }
+        .icon { margin-right: 8px; }
+        .folder { color: #ffc107; }
+        .file { color: #28a745; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Мой Файлообменник</h1>
+
+    <div class="path">
+        <strong>Путь:</strong>
+        <a href="/">/</a>
+        {{ $parts := split .CurrentPath "/" }}
+        {{range $i, $part := $parts }}
+            {{if $part}}
+                {{ $prefix := join (slice $parts 0 (add $i 1)) "/" }}
+                <a href="/{{$prefix}}">{{$part}}</a> /
+            {{end}}
+        {{end}}
+    </div>
+
+    <div class="actions">
+        <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Загрузить файл</button>
+        <button class="btn btn-primary" onclick="showMkdir()">Создать папку</button>
+        {{if .ParentPath}}
+            <a href="/{{.ParentPath}}" class="btn btn-primary">На уровень вверх</a>
+        {{end}}
+    </div>
+
+    <!-- Создание папки -->
+    <div id="mkdirForm" style="display:none; margin:15px 0;">
+        <form method="post" action="/mkdir" style="display:inline;">
+            <input type="hidden" name="dir" value="{{.CurrentPath}}" />
+            <input type="text" name="name" placeholder="Имя папки" required style="padding:8px; width:200px;" />
+            <button type="submit" class="btn btn-primary">Создать</button>
+            <button type="button" class="btn" onclick="hideMkdir()">Отмена</button>
+        </form>
+    </div>
+
+    <!-- Загрузка -->
+    <div class="upload-area" id="uploadArea">
+        <p>Перетащите файлы сюда или нажмите</p>
+        <input type="file" id="fileInput" multiple style="display:none" />
+    </div>
+
+    <form id="uploadForm" enctype="multipart/form-data" style="display:none">
+        <input type="hidden" name="dir" value="{{.CurrentPath}}" />
+        <input type="file" name="file" multiple />
+    </form>
+
+    <h2>Содержимое</h2>
+    {{if not .Items}}
+        <p>Пусто. Загрузите файлы или создайте папку.</p>
+    {{else}}
+        <table>
+            <tr>
+                <th>Имя</th>
+                <th>Размер</th>
+                <th>Действия</th>
+            </tr>
+            {{range .Items}}
+                <tr>
+                    <td>
+                        <span class="icon">{{if .IsDir}}[Папка]{{else}}[Файл]{{end}}</span>
+                        {{if .IsDir}}
+                            <a href="/{{if ne $.CurrentPath ""}}{{$.CurrentPath}}/{{end}}{{.Name}}">{{.Name}}</a>
+                        {{else}}
+                            <a href="{{.URL}}" target="_blank">{{.Name}}</a>
+                        {{end}}
+                    </td>
+                    <td>
+                        {{if .IsDir}}—{{else}}{{printf "%.1f КБ" (div .Size 1024.0)}}{{end}}
+                    </td>
+                    <td>
+                        {{if not .IsDir}}
+                            <a href="{{.URL}}" class="btn btn-small btn-primary" download>Скачать</a>
+                        {{end}}
+                        <form action="{{.DeleteURL}}" method="post" style="display:inline">
+                            <button type="submit" class="btn btn-small btn-danger" onclick="return confirm('Удалить {{.Name}}?')">
+                                Удалить
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+            {{end}}
+        </table>
+    {{end}}
+</div>
+
+<script>
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+    uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+    uploadArea.addEventListener('drop', e => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        uploadFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+
+    function uploadFiles(files) {
+        const formData = new FormData();
+        formData.append('dir', '{{.CurrentPath}}');
+        for (let file of files) formData.append('file', file);
+
+        fetch('/upload', { method: 'POST', body: formData })
+            .then(() => location.reload());
+    }
+
+    function showMkdir() { document.getElementById('mkdirForm').style.display = 'block'; }
+    function hideMkdir() { document.getElementById('mkdirForm').style.display = 'none'; }
+</script>
+</body>
+</html>
