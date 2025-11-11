@@ -21,7 +21,7 @@
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
         th { background: #f8f9fa; }
-        .icon { margin-right: 8px; }
+        .icon { margin-right: 8px; font-size: 1.2em;}
         .folder { color: #ffc107; }
         .file { color: #28a745; }
     </style>
@@ -34,10 +34,11 @@
         <strong>Путь:</strong>
         <a href="/">/</a>
         {{ $parts := split .CurrentPath "/" }}
+        {{ $currentPrefix := "" }}
         {{range $i, $part := $parts }}
             {{if $part}}
-                {{ $prefix := join (slice $parts 0 (add $i 1)) "/" }}
-                <a href="/{{$prefix}}">{{$part}}</a> /
+                {{ $currentPrefix = join (slice $parts 0 (add $i 1)) "/" }}
+                <a href="/{{$currentPrefix}}">{{$part}}</a> /
             {{end}}
         {{end}}
     </div>
@@ -50,7 +51,6 @@
         {{end}}
     </div>
 
-    <!-- Создание папки -->
     <div id="mkdirForm" style="display:none; margin:15px 0;">
         <form method="post" action="/mkdir" style="display:inline;">
             <input type="hidden" name="dir" value="{{.CurrentPath}}" />
@@ -60,16 +60,10 @@
         </form>
     </div>
 
-    <!-- Загрузка -->
     <div class="upload-area" id="uploadArea">
         <p>Перетащите файлы сюда или нажмите</p>
         <input type="file" id="fileInput" multiple style="display:none" />
     </div>
-
-    <form id="uploadForm" enctype="multipart/form-data" style="display:none">
-        <input type="hidden" name="dir" value="{{.CurrentPath}}" />
-        <input type="file" name="file" multiple />
-    </form>
 
     <h2>Содержимое</h2>
     {{if not .Items}}
@@ -84,22 +78,20 @@
             {{range .Items}}
                 <tr>
                     <td>
-                        <span class="icon">{{if .IsDir}}[Папка]{{else}}[Файл]{{end}}</span>
-                        {{if .IsDir}}
-                            <a href="/{{if ne $.CurrentPath ""}}{{$.CurrentPath}}/{{end}}{{.Name}}">{{.Name}}</a>
-                        {{else}}
-                            <a href="{{.URL}}" target="_blank">{{.Name}}</a>
-                        {{end}}
+                        <span class="icon {{if .IsDir}}folder{{else}}file{{end}}">
+                            {{if .IsDir}}&#128193;{{else}}&#128196;{{end}}
+                        </span>
+                        <a href="{{.URL}}">{{.Name}}</a>
                     </td>
                     <td>
-                        {{if .IsDir}}—{{else}}{{printf "%.1f КБ" (div .Size 1024.0)}}{{end}}
+                        {{if .IsDir}}—{{else}}{{.FormattedSize}}{{end}}
                     </td>
                     <td>
                         {{if not .IsDir}}
                             <a href="{{.URL}}" class="btn btn-small btn-primary" download>Скачать</a>
                         {{end}}
                         <form action="{{.DeleteURL}}" method="post" style="display:inline">
-                            <button type="submit" class="btn btn-small btn-danger" onclick="return confirm('Удалить {{.Name}}?')">
+                            <button type="submit" class="btn btn-small btn-danger" onclick="return confirm('Вы действительно хотите удалить {{.Name}}?')">
                                 Удалить
                             </button>
                         </form>
@@ -113,6 +105,7 @@
 <script>
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
+    const currentPath = '{{.CurrentPath}}';
 
     uploadArea.addEventListener('click', () => fileInput.click());
     uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
@@ -126,16 +119,28 @@
     fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
 
     function uploadFiles(files) {
+        if (files.length === 0) return;
+
         const formData = new FormData();
-        formData.append('dir', '{{.CurrentPath}}');
-        for (let file of files) formData.append('file', file);
+        formData.append('dir', currentPath);
+
+        for (let i = 0; i < files.length; i++) {
+            formData.append('file', files[i]);
+        }
 
         fetch('/upload', { method: 'POST', body: formData })
-            .then(() => location.reload());
+            .then(response => {
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    response.text().then(text => alert('Ошибка при загрузке: ' + text));
+                }
+            })
+            .catch(error => alert('Ошибка сети: ' + error));
     }
 
     function showMkdir() { document.getElementById('mkdirForm').style.display = 'block'; }
     function hideMkdir() { document.getElementById('mkdirForm').style.display = 'none'; }
 </script>
 </body>
-</html>
+</html></html>

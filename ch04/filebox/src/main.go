@@ -14,12 +14,27 @@ import (
 
 var uploadDir = "./uploads"
 
+// formatSize преобразует размер файла в байтах в удобочитаемый формат (B, KB, MB, GB).
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 var funcMap = template.FuncMap{
-	"split": strings.Split,
-	"join":  strings.Join,
-	"add":   func(a, b int) int { return a + b },
-	"slice": func(arr []string, start, end int) []string { return arr[start:end] },
-	"div":   func(a int64, b float64) float64 { return float64(a) / b },
+	"split":      strings.Split,
+	"join":       strings.Join,
+	"add":        func(a, b int) int { return a + b },
+	"slice":      func(arr []string, start, end int) []string { return arr[start:end] },
+	"div":        func(a int64, b float64) float64 { return float64(a) / b },
+	"formatSize": formatSize,
 }
 
 var tmpl *template.Template
@@ -30,11 +45,12 @@ func init() {
 }
 
 type File struct {
-	Name      string
-	IsDir     bool
-	Size      int64
-	URL       string
-	DeleteURL string
+	Name          string
+	IsDir         bool
+	Size          int64
+	FormattedSize string
+	URL           string
+	DeleteURL     string
 }
 
 type PageData struct {
@@ -44,6 +60,7 @@ type PageData struct {
 }
 
 func main() {
+	log.Println("Инициализация: Создание директории для загрузки")
 	os.MkdirAll(uploadDir, os.ModePerm)
 
 	http.HandleFunc("/", homeHandler)
@@ -52,7 +69,7 @@ func main() {
 	http.HandleFunc("/delete/", deleteHandler)
 	http.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.Dir(uploadDir))))
 
-	fmt.Println("Сервер: http://localhost:8080")
+	log.Println("Сервер запущен на: http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -68,7 +85,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 
 	rel, err := filepath.Rel(uploadDir, fullPath)
 	if err != nil || strings.Contains(rel, "..") {
-		http.Error(w, "Доступ запрещён", http.StatusForbidden)
+		http.Error(w, "Доступ запрещён: Недопустимый путь", http.StatusForbidden)
 		return
 	}
 
@@ -77,7 +94,8 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
 		} else {
-			http.Error(w, "Ошибка", http.StatusInternalServerError)
+			log.Printf("Ошибка при os.Stat(%s): %v", fullPath, err)
+			http.Error(w, "Ошибка сервера при чтении файла/папки", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -90,22 +108,40 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
+		log.Printf("Ошибка при os.ReadDir(%s): %v", fullPath, err)
 		http.Error(w, "Не могу прочитать папку", http.StatusInternalServerError)
 		return
 	}
 
 	var items []File
 	for _, entry := range entries {
-		info, _ := entry.Info()
+		info, err := entry.Info()
+
+		size := int64(0)
+		formattedSize := "N/A"
+
+		if err == nil {
+			size = info.Size()
+			formattedSize = formatSize(size)
+		} else {
+			log.Printf("Ошибка чтения info для %s: %v", entry.Name(), err)
+		}
+
 		name := entry.Name()
 
 		item := File{
-			Name:  name,
-			IsDir: entry.IsDir(),
-			Size:  info.Size(),
+			Name:          name,
+			IsDir:         entry.IsDir(),
+			Size:          size,
+			FormattedSize: formattedSize,
 		}
 
-		item.URL = "/files/" + path.Join(cleanPath, name)
+		if entry.IsDir() {
+			item.URL = "/" + path.Join(cleanPath, name)
+		} else {
+			item.URL = "/files/" + path.Join(cleanPath, name)
+		}
+
 		item.DeleteURL = "/delete/" + path.Join(cleanPath, name)
 
 		items = append(items, item)
@@ -125,7 +161,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	err = tmpl.ExecuteTemplate(w, "index.gohtml", data)
 	if err != nil {
 		log.Println("Template execute error:", err)
-		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Ошибка шаблона: "+err.Error(), http.StatusInternalServerError)
 	}
 }
 
@@ -134,6 +170,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Метод не разрешён", http.StatusMethodNotAllowed)
 		return
 	}
+
+	r.ParseMultipartForm(100 << 20) // 100 МБ
 
 	dir := r.FormValue("dir")
 	osDir := filepath.FromSlash(dir)
@@ -147,24 +185,28 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "Файл не выбран", http.StatusBadRequest)
+		http.Error(w, "Файл не выбран или ошибка формы: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
-	r.ParseMultipartForm(100 << 20)
-
 	dstPath := filepath.Join(fullDir, header.Filename)
+	if _, err := os.Stat(dstPath); err == nil {
+		log.Printf("Файл %s уже существует. Перезапись.", dstPath)
+	}
+
 	dst, err := os.Create(dstPath)
 	if err != nil {
-		http.Error(w, "Не удалось сохранить", http.StatusInternalServerError)
+		log.Printf("Ошибка при os.Create(%s): %v", dstPath, err)
+		http.Error(w, "Не удалось создать файл на сервере", http.StatusInternalServerError)
 		return
 	}
 	defer dst.Close()
 
 	_, err = io.Copy(dst, file)
 	if err != nil {
-		http.Error(w, "Ошибка копирования", http.StatusInternalServerError)
+		log.Printf("Ошибка копирования в файл %s: %v", dstPath, err)
+		http.Error(w, "Ошибка копирования файла", http.StatusInternalServerError)
 		return
 	}
 
@@ -179,8 +221,9 @@ func mkdirHandler(w http.ResponseWriter, r *http.Request) {
 
 	dir := r.FormValue("dir")
 	name := r.FormValue("name")
-	if name == "" || strings.ContainsAny(name, "/\\") {
-		http.Error(w, "Недопустимое имя", http.StatusBadRequest)
+
+	if name == "" || strings.ContainsAny(name, "/\\:") || strings.Contains(name, "..") {
+		http.Error(w, "Недопустимое имя папки (запрещены /, \\, :, ..)", http.StatusBadRequest)
 		return
 	}
 
@@ -194,11 +237,13 @@ func mkdirHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.Mkdir(fullPath, os.ModePerm); err != nil {
-		http.Error(w, "Не удалось создать папку", http.StatusInternalServerError)
+		log.Printf("Ошибка при os.Mkdir(%s): %v", fullPath, err)
+		http.Error(w, "Не удалось создать папку (возможно, уже существует)", http.StatusInternalServerError)
 		return
 	}
 
-	http.Redirect(w, r, "/"+dir, http.StatusSeeOther)
+	newPath := path.Join(dir, name)
+	http.Redirect(w, r, "/"+newPath, http.StatusSeeOther)
 }
 
 func deleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -213,16 +258,22 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 		cleanPath = strings.TrimPrefix(cleanPath, "/")
 	}
 
+	if cleanPath == "" || cleanPath == "." {
+		http.Error(w, "Нельзя удалить корневую папку", http.StatusForbidden)
+		return
+	}
+
 	osPath := filepath.FromSlash(cleanPath)
 	fullPath := filepath.Join(uploadDir, osPath)
 
 	rel, err := filepath.Rel(uploadDir, fullPath)
 	if err != nil || strings.Contains(rel, "..") {
-		http.Error(w, "Доступ запрещён", http.StatusForbidden)
+		http.Error(w, "Доступ запрещён: Недопустимый путь", http.StatusForbidden)
 		return
 	}
 
 	if err := os.RemoveAll(fullPath); err != nil {
+		log.Printf("Ошибка при os.RemoveAll(%s): %v", fullPath, err)
 		http.Error(w, "Не удалось удалить", http.StatusInternalServerError)
 		return
 	}
