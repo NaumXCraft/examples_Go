@@ -32,12 +32,12 @@ func formatSize(bytes int64) string {
 
 // funcMap — набор пользовательских функций, которые можно использовать в HTML-шаблоне.
 var funcMap = template.FuncMap{
-	"split":      strings.Split,                                                         // Разделить строку по разделителю
-	"join":       strings.Join,                                                          // Объединить массив строк
-	"add":        func(a, b int) int { return a + b },                                   // Сложение чисел
-	"slice":      func(arr []string, start, end int) []string { return arr[start:end] }, // Вырезать часть массива
-	"div":        func(a int64, b float64) float64 { return float64(a) / b },            // Деление чисел
-	"formatSize": formatSize,                                                            // Форматирование размера файла
+	"split": strings.Split,                                                         // Разделить строку по разделителю
+	"join":  strings.Join,                                                          // Объединить массив строк
+	"add":   func(a, b int) int { return a + b },                                   // Сложение чисел
+	"slice": func(arr []string, start, end int) []string { return arr[start:end] }, // Вырезать часть массива
+	//"div":        func(a int64, b float64) float64 { return float64(a) / b },            // Деление чисел
+	//"formatSize": formatSize,                                                            // Форматирование размера файла
 }
 
 // tmpl — шаблон HTML-страницы (index.gohtml)
@@ -175,6 +175,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Разбор формы (до 100 МБ)
+	// Важно: r.ParseMultipartForm должен быть вызван для доступа к r.MultipartForm.File
 	r.ParseMultipartForm(100 << 20)
 
 	dir := r.FormValue("dir") // Папка, куда загружаем
@@ -188,33 +189,49 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Извлекаем файл из формы
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Файл не выбран или ошибка формы: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	dstPath := filepath.Join(fullDir, header.Filename)
-
-	// Создаём новый файл и копируем содержимое
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		log.Printf("Ошибка при os.Create(%s): %v", dstPath, err)
-		http.Error(w, "Не удалось создать файл на сервере", http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
-
-	_, err = io.Copy(dst, file)
-	if err != nil {
-		log.Printf("Ошибка копирования в файл %s: %v", dstPath, err)
-		http.Error(w, "Ошибка копирования файла", http.StatusInternalServerError)
+	// Проверка, что целевая папка существует
+	if _, err := os.Stat(fullDir); os.IsNotExist(err) {
+		http.Error(w, "Целевая папка не существует", http.StatusNotFound)
 		return
 	}
 
-	// После успешной загрузки — возвращаемся на текущую директорию
+	// Получаем массив всех загруженных файлов с именем "file"
+	files := r.MultipartForm.File["file"]
+
+	if len(files) == 0 {
+		http.Error(w, "Файлы для загрузки не найдены", http.StatusBadRequest)
+		return
+	}
+
+	for _, header := range files {
+		file, err := header.Open()
+		if err != nil {
+			log.Printf("Ошибка открытия загруженного файла %s: %v", header.Filename, err)
+			// Продолжаем с другими файлами, но можем отправить ошибку
+			continue
+		}
+		defer file.Close() // defer внутри цикла — это нормально для локальной переменной 'file'
+
+		dstPath := filepath.Join(fullDir, header.Filename)
+
+		// Создаём новый файл и копируем содержимое
+		dst, err := os.Create(dstPath)
+		if err != nil {
+			log.Printf("Ошибка при os.Create(%s): %v", dstPath, err)
+			// Можно проигнорировать этот файл и продолжить, или выйти с ошибкой.
+			// Здесь мы продолжим.
+			continue
+		}
+		defer dst.Close()
+
+		_, err = io.Copy(dst, file)
+		if err != nil {
+			log.Printf("Ошибка копирования в файл %s: %v", dstPath, err)
+			continue
+		}
+	}
+
+	// После успешной загрузки всех файлов — возвращаемся на текущую директорию
 	http.Redirect(w, r, "/"+dir, http.StatusSeeOther)
 }
 
