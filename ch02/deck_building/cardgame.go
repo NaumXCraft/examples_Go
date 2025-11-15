@@ -1,4 +1,3 @@
-// file: cardgame.go
 package main
 
 import (
@@ -52,15 +51,15 @@ type CardEffect struct {
 }
 
 type Card struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Type        CardType   `json:"type"`
-	Cost        int        `json:"cost"`
-	Attack      int        `json:"attack"`
-	Effect      CardEffect `json:"effect"`
-	Description string     `json:"description"`
-	Rarity      string     `json:"rarity"`
-	Exhausts    bool       `json:"exhausts"`
+	ID          string // json tags removed (unused)
+	Name        string
+	Type        CardType
+	Cost        int
+	Attack      int // legacy; consider migrating to Effect.Damage
+	Effect      CardEffect
+	Description string
+	Rarity      string
+	Exhausts    bool
 }
 
 type Status struct {
@@ -129,6 +128,7 @@ func applyStartStatuses(p *Player) int {
 			fmt.Printf("%s получает %d урона от %s\n", p.Name, s.Value, s.Name)
 			total += s.Value
 		}
+		// TODO: Extend for other statuses (e.g., Weak, Vulnerable multipliers)
 		s.Duration--
 		if s.Duration > 0 {
 			newStatuses = append(newStatuses, s)
@@ -176,13 +176,17 @@ func (gs *GameState) playCard(playerIdx int, handIdx int, targetIdx int) error {
 	p.Energy -= card.Cost
 	// effects apply
 	target := gs.Players[targetIdx]
+	damageDealt := 0
 	if card.Attack > 0 {
+		damageDealt += card.Attack
 		fmt.Printf("%s наносит %d урона (карта %s)\n", p.Name, card.Attack, card.Name)
-		target.takeDamage(card.Attack)
 	}
 	if card.Effect.Damage > 0 {
+		damageDealt += card.Effect.Damage
 		fmt.Printf("%s наносит эффектом %d урона\n", p.Name, card.Effect.Damage)
-		target.takeDamage(card.Effect.Damage)
+	}
+	if damageDealt > 0 {
+		target.takeDamage(damageDealt)
 	}
 	if card.Effect.Block > 0 {
 		p.Block += card.Effect.Block
@@ -199,6 +203,12 @@ func (gs *GameState) playCard(playerIdx int, handIdx int, targetIdx int) error {
 		target.Statuses = append(target.Statuses, Status{Name: "Burn", Duration: 3, Value: card.Effect.ApplyBurn})
 		fmt.Printf("%s накладывает Burn %d на %s\n", p.Name, card.Effect.ApplyBurn, target.Name)
 	}
+	// TODO: Handle other effects like ApplyWeak, ApplyVuln
+	if card.Type == PowerCard {
+		// Example: Power cards apply permanent status (extend as needed)
+		fmt.Printf("%s активирует power: %s (permanent effect)\n", p.Name, card.Name)
+		// For now, just log; extend Status for powers if needed
+	}
 	// exhaust or discard
 	if card.Exhausts {
 		p.Exhaust = append(p.Exhaust, card)
@@ -213,18 +223,45 @@ func (gs *GameState) playCard(playerIdx int, handIdx int, targetIdx int) error {
 func (gs *GameState) aiTakeTurn(aiIdx int) {
 	p := gs.Players[aiIdx]
 	oppIdx := 1 - aiIdx
-	// try to play cards while possible
-	played := true
-	for played {
-		played = false
-		// prefer attacks/burn/block
-		for i := 0; i < len(p.Hand); i++ {
-			c := p.Hand[i]
-			if c.Cost <= p.Energy {
-				if c.Attack > 0 || c.Effect.Damage > 0 || c.Effect.ApplyBurn > 0 || c.Effect.Block > 0 {
-					fmt.Printf("AI %s играет карту %s\n", p.Name, c.Name)
+	// try to play cards while possible, prioritizing attacks > block > draw/heal
+	handCopy := make([]Card, len(p.Hand))
+	copy(handCopy, p.Hand) // Avoid modifying during iteration
+	for _, card := range handCopy {
+		if card.Cost > p.Energy {
+			continue
+		}
+		// Simple priority: attack/burn first, then block, then utility
+		if card.Attack > 0 || card.Effect.Damage > 0 || card.Effect.ApplyBurn > 0 {
+			// Find index in hand
+			for i := range p.Hand {
+				if p.Hand[i].ID == card.ID { // Use ID for matching
+					fmt.Printf("AI %s играет карту %s\n", p.Name, card.Name)
 					_ = gs.playCard(aiIdx, i, oppIdx)
-					played = true
+					break
+				}
+			}
+			continue
+		}
+		if card.Effect.Block > 0 {
+			for i := range p.Hand {
+				if p.Hand[i].ID == card.ID {
+					fmt.Printf("AI %s играет карту %s\n", p.Name, card.Name)
+					_ = gs.playCard(aiIdx, i, aiIdx) // Block self
+					break
+				}
+			}
+			continue
+		}
+		// Utility (draw/heal)
+		if card.Effect.Draw > 0 || card.Effect.Heal > 0 {
+			for i := range p.Hand {
+				if p.Hand[i].ID == card.ID {
+					fmt.Printf("AI %s играет карту %s\n", p.Name, card.Name)
+					targetIdx := aiIdx // Self for utility
+					if card.Effect.Heal > 0 {
+						targetIdx = aiIdx
+					}
+					_ = gs.playCard(aiIdx, i, targetIdx)
 					break
 				}
 			}
@@ -268,15 +305,19 @@ func (gs *GameState) checkWin() (bool, string) {
 }
 
 func starterDeck() []Card {
+	// Refactored: Removed duplicates, added unique cards, included PowerCard example
+	// Balanced starter: 10 cards, mix of types
 	return []Card{
-		{ID: "c_atk1", Name: "Удар", Type: AttackCard, Cost: 1, Attack: 6, Description: "Простой удар", Rarity: "common"},
-		{ID: "c_block1", Name: "Блок", Type: SkillCard, Cost: 1, Effect: CardEffect{Block: 6}, Description: "Получить блок", Rarity: "common"},
-		{ID: "c_strike", Name: "Огненный удар", Type: AttackCard, Cost: 2, Effect: CardEffect{Damage: 8, ApplyBurn: 2}, Description: "Урон + накладывает Burn", Rarity: "uncommon"},
-		{ID: "c_draw", Name: "Вдохновение", Type: SkillCard, Cost: 0, Effect: CardEffect{Draw: 2}, Description: "Добрать 2 карты", Rarity: "common"},
-		{ID: "c_heal", Name: "Исцеление", Type: SkillCard, Cost: 2, Effect: CardEffect{Heal: 5}, Description: "Исцеление", Rarity: "rare", Exhausts: true},
-		{ID: "c_atk1", Name: "Удар", Type: AttackCard, Cost: 1, Attack: 6, Description: "Простой удар", Rarity: "common"},
-		{ID: "c_block1", Name: "Блок", Type: SkillCard, Cost: 1, Effect: CardEffect{Block: 6}, Description: "Получить блок", Rarity: "common"},
-		{ID: "c_atk1", Name: "Удар", Type: AttackCard, Cost: 1, Attack: 6},
+		{ID: "strike", Name: "Удар", Type: AttackCard, Cost: 1, Attack: 6, Description: "Простой удар", Rarity: "common"},
+		{ID: "defend", Name: "Блок", Type: SkillCard, Cost: 1, Effect: CardEffect{Block: 6}, Description: "Получить блок", Rarity: "common"},
+		{ID: "firestrike", Name: "Огненный удар", Type: AttackCard, Cost: 2, Effect: CardEffect{Damage: 8, ApplyBurn: 2}, Description: "Урон + накладывает Burn", Rarity: "uncommon"},
+		{ID: "inspire", Name: "Вдохновение", Type: SkillCard, Cost: 0, Effect: CardEffect{Draw: 2}, Description: "Добрать 2 карты", Rarity: "common"},
+		{ID: "heal", Name: "Исцеление", Type: SkillCard, Cost: 2, Effect: CardEffect{Heal: 5}, Description: "Исцеление", Rarity: "rare", Exhausts: true},
+		{ID: "bash", Name: "Удар щитом", Type: AttackCard, Cost: 2, Attack: 8, Effect: CardEffect{ApplyWeak: 1}, Description: "Урон + Weak на врага", Rarity: "uncommon"},
+		{ID: "surge", Name: "Всплеск", Type: SkillCard, Cost: 1, Effect: CardEffect{Draw: 1, Block: 3}, Description: "Добрать 1 + 3 блока", Rarity: "common"},
+		{ID: "strength", Name: "Сила", Type: PowerCard, Cost: 1, Effect: CardEffect{ApplyWeak: -2}, Description: "Permanent +2 attack (simplified as status)", Rarity: "rare"}, // Uses PowerCard
+		{ID: "neutralize", Name: "Нейтрализация", Type: SkillCard, Cost: 1, Effect: CardEffect{ApplyWeak: 1, Block: 4}, Description: "Weak на врага + 4 блока", Rarity: "uncommon"},
+		{ID: "cleave", Name: "Разруб", Type: AttackCard, Cost: 1, Attack: 5, Description: "Быстрый урон", Rarity: "common"},
 	}
 }
 
@@ -302,20 +343,26 @@ func newPlayer(name string, maxhp, maxenergy int, deck []Card, isAI bool, r *ran
 		IsAI:      isAI,
 	}
 	// draw opening hand
+	tempGS := &GameState{Rand: r}
 	for i := 0; i < 5; i++ {
-		drawOne(p, &GameState{Rand: r})
+		drawOne(p, tempGS)
 	}
 	return p
 }
 
-// helpers for debug / commands
+// Helpers for commands/debug
 func showInfo(gs *GameState) {
-	p := gs.Players[gs.ActiveIdx]
-	opp := gs.Players[1-gs.ActiveIdx]
-	fmt.Printf("\n=== %s === Turn:%d Active:%d\n", p.Name, gs.Turn, gs.ActiveIdx)
+	active := gs.ActiveIdx
+	p := gs.Players[active]
+	opp := gs.Players[1-active]
+	fmt.Printf("\n=== %s === Turn:%d Active:%d\n", p.Name, gs.Turn, active)
 	fmt.Printf("%s HP:%d/%d E:%d Block:%d Deck:%d Discard:%d Exhaust:%d Hand:%d\n",
 		p.Name, p.HP, p.MaxHP, p.Energy, p.Block, len(p.Deck), len(p.Discard), len(p.Exhaust), len(p.Hand))
 	fmt.Printf("Opponent %s HP:%d/%d Block:%d\n", opp.Name, opp.HP, opp.MaxHP, opp.Block)
+	showHand(p)
+}
+
+func showHand(p *Player) {
 	fmt.Println("Hand:")
 	for i, c := range p.Hand {
 		fmt.Printf(" [%d] %s (cost:%d) - %s\n", i, c.Name, c.Cost, c.Description)
@@ -335,8 +382,9 @@ func inspectCard(p *Player, idx int) {
 	fmt.Println("----- Card Details -----")
 	fmt.Printf("Name: %s (%s)\n", c.Name, c.Rarity)
 	fmt.Printf("Type: %s Cost: %d Attack:%d Exhausts:%v\n", c.Type, c.Cost, c.Attack, c.Exhausts)
-	fmt.Printf("Effect: Damage=%d Block=%d Draw=%d Heal=%d Burn=%d\n",
-		c.Effect.Damage, c.Effect.Block, c.Effect.Draw, c.Effect.Heal, c.Effect.ApplyBurn)
+	fmt.Printf("Effect: Damage=%d Block=%d Draw=%d Heal=%d Burn=%d Weak=%d Vuln=%d\n",
+		c.Effect.Damage, c.Effect.Block, c.Effect.Draw, c.Effect.Heal, c.Effect.ApplyBurn,
+		c.Effect.ApplyWeak, c.Effect.ApplyVuln)
 	fmt.Printf("Desc: %s\n", c.Description)
 	fmt.Println("------------------------")
 }
@@ -369,6 +417,24 @@ func mulligan(p *Player, gs *GameState) {
 	p.Hand = nil
 	drawN(p, gs, handSize)
 	fmt.Println("Mulligan выполнен: новая рука.")
+}
+
+func printHelp() {
+	fmt.Println("Доступные команды:")
+	fmt.Println(" play <i> [target]  - сыграть карту из руки (target: 0=you,1=enemy) ")
+	fmt.Println(" end                - закончить ход")
+	fmt.Println(" info               - показать состояние")
+	fmt.Println(" hand               - показать руку")
+	fmt.Println(" deck               - показать колоду/сброс/исчерпанные размеры")
+	fmt.Println(" inspect <i>        - показать детали карты из руки")
+	fmt.Println(" draw <n>           - добрать n карт (debug)")
+	fmt.Println(" shuffle            - перетасовать колоду")
+	fmt.Println(" discardc <i>       - отправить карту i из руки в сброс")
+	fmt.Println(" exhaustc <i>       - отправить карту i из руки в exhaust")
+	fmt.Println(" mulligan           - сбросить руку и взять новые карты (debug)")
+	fmt.Println(" concede            - сдаться")
+	fmt.Println(" help / h           - показать эту справку")
+	fmt.Println(" quit / q           - выйти")
 }
 
 func main() {
@@ -446,11 +512,7 @@ mainloop:
 				case "info":
 					showInfo(gs)
 				case "hand":
-					p := gs.Players[active]
-					fmt.Println("Hand:")
-					for i, c := range p.Hand {
-						fmt.Printf(" [%d] %s (cost:%d) - %s\n", i, c.Name, c.Cost, c.Description)
-					}
+					showHand(gs.Players[active])
 				case "deck":
 					showDeckCounts(gs.Players[active])
 				case "discard":
@@ -508,21 +570,7 @@ mainloop:
 					fmt.Println("Вы сдались.")
 					break mainloop
 				case "help", "h":
-					fmt.Println("Доступные команды:")
-					fmt.Println(" play <i> [target]  - сыграть карту из руки (target: 0=you,1=enemy) ")
-					fmt.Println(" end                - закончить ход")
-					fmt.Println(" info               - показать состояние")
-					fmt.Println(" hand               - показать руку")
-					fmt.Println(" deck               - показать колоду/сброс/исчерпанные размеры")
-					fmt.Println(" inspect <i>        - показать детали карты из руки")
-					fmt.Println(" draw <n>           - добрать n карт (debug)")
-					fmt.Println(" shuffle            - перетасовать колоду")
-					fmt.Println(" discardc <i>       - отправить карту i из руки в сброс")
-					fmt.Println(" exhaustc <i>       - отправить карту i из руки в exhaust")
-					fmt.Println(" mulligan           - сбросить руку и взять новые карты (debug)")
-					fmt.Println(" concede            - сдаться")
-					fmt.Println(" help / h           - показать эту справку")
-					fmt.Println(" quit / q           - выйти")
+					printHelp()
 				case "quit", "q":
 					fmt.Println("Выход")
 					return
