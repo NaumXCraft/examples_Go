@@ -45,8 +45,8 @@ var tmpl *template.Template
 
 // init выполняется при старте программы. Загружает шаблон и связывает функции из funcMap.
 func init() {
-	tmpl = template.New("index.gohtml").Funcs(funcMap)
-	tmpl = template.Must(tmpl.ParseFiles("static/index.gohtml"))
+	tmpl = template.New("index.html").Funcs(funcMap)
+	tmpl = template.Must(tmpl.ParseFiles("static/index.html"))
 }
 
 // File — структура, описывающая один элемент (файл или папку)
@@ -160,7 +160,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Отправляем данные в шаблон
-	err = tmpl.ExecuteTemplate(w, "index.gohtml", data)
+	err = tmpl.ExecuteTemplate(w, "index.html", data)
 	if err != nil {
 		log.Println("Template execute error:", err)
 		http.Error(w, "Ошибка шаблона: "+err.Error(), http.StatusInternalServerError)
