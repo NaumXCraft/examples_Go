@@ -238,6 +238,7 @@ func getTCPFlags(tcp *layers.TCP) string {
 	if tcp.CWR {
 		flags = append(flags, "CWR")
 	}
+
 	return strings.Join(flags, "|")
 }
 
