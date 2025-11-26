@@ -131,77 +131,101 @@ func getIPs(device pcap.Interface) string {
 	return "нет IP"
 }
 
-// Улучшенная функция вывода кадра (теперь с разбором L3 и L4)
 func printFrame(packet gopacket.Packet, count int) {
-	data := packet.Data() // весь кадр в байтах (включая возможный FCS, если драйвер его вернул)
+	data := packet.Data() // Полный кадр как получен от драйвера (L1/L2, включая FCS если драйвер его оставил)
 
 	writeLine(strings.Repeat("=", 80))
-	writeLine(fmt.Sprintf("#%d | Время: %s | Общая Длина: %d байт", count, time.Now().Format("15:04:05.000"), len(data)))
+	writeLine(fmt.Sprintf("#%d | Время: %s | Общая Длина: %d байт",
+		count, time.Now().Format("15:04:05.000"), len(data)))
 
 	// ----------------------------------------------------
-	// L2: Ethernet
+	// L2: Канальный уровень (Ethernet, MAC-адреса, EtherType, VLAN)
 	// ----------------------------------------------------
 	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
 		eth := ethLayer.(*layers.Ethernet)
-		writeLine(fmt.Sprintf("L2 (Ethernet): %s → %s (Тип: %s 0x%04x)", eth.SrcMAC, eth.DstMAC, eth.EthernetType, uint16(eth.EthernetType)))
+		writeLine(fmt.Sprintf(
+			"L2 (Ethernet): %s → %s (EtherType: %s 0x%04x)",
+			eth.SrcMAC, eth.DstMAC, eth.EthernetType, uint16(eth.EthernetType),
+		))
 
 		if vlan := packet.Layer(layers.LayerTypeDot1Q); vlan != nil {
 			v := vlan.(*layers.Dot1Q)
-			writeLine(fmt.Sprintf("  ↳ VLAN: ID %d (Приоритет %d)", v.VLANIdentifier, v.Priority))
+			writeLine(fmt.Sprintf("  ↳ VLAN: ID %d (Приоритет %d)",
+				v.VLANIdentifier, v.Priority))
 		}
 	}
 
 	// ----------------------------------------------------
-	// L3: IP (IPv4 или IPv6)
+	// L3: Сетевой уровень (IP-адреса, маршрутизация, TTL/HopLimit)
 	// ----------------------------------------------------
 	if netLayer := packet.NetworkLayer(); netLayer != nil {
 		switch netLayer.LayerType() {
 		case layers.LayerTypeIPv4:
 			ip := netLayer.(*layers.IPv4)
-			writeLine(fmt.Sprintf("L3 (IPv4): %s → %s (TTL: %d, Протокол: %s)", ip.SrcIP, ip.DstIP, ip.TTL, ip.Protocol))
+			writeLine(fmt.Sprintf(
+				"L3 (IPv4): %s → %s (TTL: %d, Протокол: %s)",
+				ip.SrcIP, ip.DstIP, ip.TTL, ip.Protocol,
+			))
+
 		case layers.LayerTypeIPv6:
 			ip := netLayer.(*layers.IPv6)
-			writeLine(fmt.Sprintf("L3 (IPv6): %s → %s (Hop Limit: %d, Next Header: %s)", ip.SrcIP, ip.DstIP, ip.HopLimit, ip.NextHeader))
+			writeLine(fmt.Sprintf(
+				"L3 (IPv6): %s → %s (HopLimit: %d, NextHeader: %s)",
+				ip.SrcIP, ip.DstIP, ip.HopLimit, ip.NextHeader,
+			))
+
 		default:
 			writeLine(fmt.Sprintf("L3 (Не IP): %s", netLayer.LayerType()))
 		}
 	}
 
 	// ----------------------------------------------------
-	// L4: Транспортный уровень (TCP, UDP, ICMP)
+	// L4: Транспортный уровень (TCP/UDP, порты, Seq/Ack, флаги)
 	// ----------------------------------------------------
 	if transportLayer := packet.TransportLayer(); transportLayer != nil {
 		switch transportLayer.LayerType() {
+
 		case layers.LayerTypeTCP:
 			tcp := transportLayer.(*layers.TCP)
 			flags := getTCPFlags(tcp)
-			writeLine(fmt.Sprintf("L4 (TCP): Port %d → %d (Seq: %d, Ack: %d, Flags: %s)", tcp.SrcPort, tcp.DstPort, tcp.Seq, tcp.Ack, flags))
+			writeLine(fmt.Sprintf(
+				"L4 (TCP): Port %d → %d (Seq: %d, Ack: %d, Flags: %s)",
+				tcp.SrcPort, tcp.DstPort, tcp.Seq, tcp.Ack, flags,
+			))
+
 		case layers.LayerTypeUDP:
 			udp := transportLayer.(*layers.UDP)
-			writeLine(fmt.Sprintf("L4 (UDP): Port %d → %d (Length: %d)", udp.SrcPort, udp.DstPort, udp.Length))
+			writeLine(fmt.Sprintf(
+				"L4 (UDP): Port %d → %d (Length: %d)",
+				udp.SrcPort, udp.DstPort, udp.Length,
+			))
+
 		default:
 			writeLine(fmt.Sprintf("L4: %s", transportLayer.LayerType()))
 		}
 	}
 
 	// ----------------------------------------------------
-	// Полезная нагрузка (Если это не TCP/UDP, то полезные данные)
+	// L5: Прикладной уровень (DNS, HTTP, TLS, прочий payload)
 	// ----------------------------------------------------
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
-		// Если это DNS-пакет, gopacket его распознает и его можно вывести
+
+		// Если это DNS (распознаётся как отдельный L5-протокол)
 		if dnsLayer := packet.Layer(layers.LayerTypeDNS); dnsLayer != nil {
 			dns := dnsLayer.(*layers.DNS)
 			if len(dns.Questions) > 0 {
 				q := dns.Questions[0]
-				// Выводим данные запроса (например, accounts.youtube.com)
-				writeLine(fmt.Sprintf("L7 (DNS): Запрос: %s (Тип %s)", q.Name, q.Type))
+				writeLine(fmt.Sprintf(
+					"L5 (DNS): Запрос: %s (Тип %s)",
+					q.Name, q.Type,
+				))
 			}
 		}
 
-		// Если это просто данные приложения, можно вывести их длину
+		// Payload прикладного уровня (например HTTP, TLS, RAW данные)
 		payload := appLayer.Payload()
 		if len(payload) > 0 {
-			writeLine(fmt.Sprintf("L7 (Payload): Длина: %d байт", len(payload)))
+			writeLine(fmt.Sprintf("L5 (Payload): Длина: %d байт", len(payload)))
 		}
 	}
 
@@ -278,7 +302,10 @@ func hexDump(data []byte) {
 			prefix = "Type" // EtherType
 		}
 
-		writeLine(fmt.Sprintf("%04X  %s %s %s", i, prefix, hex, ascii))
+		// offset
+		offsetStr := fmt.Sprintf("0x%02X", i)
+
+		writeLine(fmt.Sprintf("%s  %s %s %s", offsetStr, prefix, hex, ascii))
 	}
 }
 
