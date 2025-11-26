@@ -1,4 +1,3 @@
-// main.go
 package main
 
 import (
@@ -17,7 +16,7 @@ import (
 var outputFile *os.File
 
 func main() {
-	// Открываем файл для записи
+	// Открываем файл для записи. Используем os.O_TRUNC, чтобы очистить старое содержимое.
 	var err error
 	outputFile, err = os.OpenFile("frames.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -36,7 +35,7 @@ func main() {
 	}
 
 	if len(devices) == 0 {
-		fmt.Println("Нет сетевых интерфейсов! Установи Npcap.")
+		fmt.Println("Нет сетевых интерфейсов! Установите Npcap (WinPcap-совместимый драйвер).")
 		return
 	}
 
@@ -47,10 +46,10 @@ func main() {
 	}
 	fmt.Print("Выбери номер интерфейса (Enter для авто-выбора с IP): ")
 
-	// Читаем выбор интерфейса
+	// Читаем выбор интерфейса (улучшено для Windows)
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
+	input = strings.TrimSpace(input) // Удаляем пробелы и переводы строки (\r\n)
 
 	var selectedDevice pcap.Interface
 	if input == "" {
@@ -74,86 +73,175 @@ func main() {
 		}
 	}
 
-	// Открываем выбранный интерфейс
+	// Открываем выбранный интерфейс. SnapLen 65536, Promiscuous mode, BlockForever.
+	// Примечание: pcap.OpenLive требует административных прав в Windows.
 	handle, err := pcap.OpenLive(selectedDevice.Name, 65536, true, pcap.BlockForever)
 	if err != nil {
-		panic(fmt.Sprintf("Ошибка открытия %s: %v", selectedDevice.Name, err))
+		panic(fmt.Sprintf("Ошибка открытия %s (попробуйте запустить с правами администратора): %v", selectedDevice.Name, err))
 	}
 	defer handle.Close()
 
 	fmt.Printf("\nСлушаю интерфейс: %s (%s)\n", selectedDevice.Name, selectedDevice.Description)
 
 	// Выбор фильтра порта
-	fmt.Print("\nФильтр по порту (примеры: 'tcp port 443', 'udp port 53', 'icmp'; Enter для всего): ")
+	fmt.Print("\nФильтр BPF (примеры: 'tcp port 443', 'udp port 53', 'icmp'; Enter для всего): ")
 	filterInput, _ := reader.ReadString('\n')
 	filterInput = strings.TrimSpace(filterInput)
 	if filterInput == "" {
-		filterInput = "" // Всё
+		filterInput = "" // Ловим всё
 	} else {
-		fmt.Printf("Фильтр: '%s' (только эти пакеты)\n", filterInput)
+		fmt.Printf("Применяю фильтр: '%s'\n", filterInput)
 		err = handle.SetBPFFilter(filterInput)
 		if err != nil {
-			fmt.Printf("Ошибка фильтра: %v. Ловим всё.\n", err)
+			fmt.Printf("Ошибка фильтра BPF: %v. Ловим весь трафик.", err)
+			filterInput = ""
 		}
 	}
 
 	fmt.Println("Все кадры сохраняются в frames.txt — открывай его в блокноте!")
-	fmt.Println("Генерируй трафик: ping google.com (для ICMP) или открой браузер (для 443).")
 	writeLine("Интерфейс: " + selectedDevice.Description)
 	if filterInput != "" {
-		writeLine("Фильтр: " + filterInput)
+		writeLine("Фильтр BPF: " + filterInput)
 	}
+	writeLine(strings.Repeat("-", 80))
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	counter := 0
 	for packet := range packetSource.Packets() {
 		counter++
-		printFrame(packet)
-		if counter > 100 { // Останавливаем после 100 кадров (убери для бесконечно)
+		printFrame(packet, counter)
+		if counter >= 100 { // Убрал > 100 на >= 100
 			fmt.Println("\nЗахвачено 100 кадров. Останавливаю. Проверь frames.txt!")
 			break
 		}
 	}
 }
 
+// Вспомогательная функция для получения IP-адресов
 func getIPs(device pcap.Interface) string {
 	if len(device.Addresses) == 0 {
 		return "нет IP"
 	}
-	return device.Addresses[0].IP.String()
+	// Ищем первый IPv4 или IPv6 адрес
+	for _, addr := range device.Addresses {
+		if addr.IP != nil {
+			return addr.IP.String()
+		}
+	}
+	return "нет IP"
 }
 
-func printFrame(packet gopacket.Packet) {
-	data := packet.Data() // весь кадр в байтах (включая FCS!)
+// Улучшенная функция вывода кадра (теперь с разбором L3 и L4)
+func printFrame(packet gopacket.Packet, count int) {
+	data := packet.Data() // весь кадр в байтах (включая возможный FCS, если драйвер его вернул)
 
-	writeLine(strings.Repeat("-", 80))
-	writeLine(fmt.Sprintf("Время: %s | Длина кадра: %d байт", time.Now().Format("15:04:05.000"), len(data)))
+	writeLine(strings.Repeat("=", 80))
+	writeLine(fmt.Sprintf("#%d | Время: %s | Общая Длина: %d байт", count, time.Now().Format("15:04:05.000"), len(data)))
 
-	// Попытка распарсить Ethernet
+	// ----------------------------------------------------
+	// L2: Ethernet
+	// ----------------------------------------------------
 	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
 		eth := ethLayer.(*layers.Ethernet)
+		writeLine(fmt.Sprintf("L2 (Ethernet): %s → %s (Тип: %s 0x%04x)", eth.SrcMAC, eth.DstMAC, eth.EthernetType, uint16(eth.EthernetType)))
 
-		writeLine(fmt.Sprintf("Destination MAC → %s", eth.DstMAC))
-		writeLine(fmt.Sprintf("Source MAC      → %s", eth.SrcMAC))
-
-		// VLAN-тег (если есть)
 		if vlan := packet.Layer(layers.LayerTypeDot1Q); vlan != nil {
 			v := vlan.(*layers.Dot1Q)
-			writeLine(fmt.Sprintf("VLAN ID: %d (приоритет %d)", v.VLANIdentifier, v.Priority))
+			writeLine(fmt.Sprintf("  ↳ VLAN: ID %d (Приоритет %d)", v.VLANIdentifier, v.Priority))
 		}
-
-		writeLine(fmt.Sprintf("Тип: %s (0x%04x)", eth.EthernetType, uint16(eth.EthernetType)))
-	} else {
-		writeLine("Не Ethernet-кадр (возможно, другой тип)")
 	}
 
-	// Красивый hex-дамп всего кадра
+	// ----------------------------------------------------
+	// L3: IP (IPv4 или IPv6)
+	// ----------------------------------------------------
+	if netLayer := packet.NetworkLayer(); netLayer != nil {
+		switch netLayer.LayerType() {
+		case layers.LayerTypeIPv4:
+			ip := netLayer.(*layers.IPv4)
+			writeLine(fmt.Sprintf("L3 (IPv4): %s → %s (TTL: %d, Протокол: %s)", ip.SrcIP, ip.DstIP, ip.TTL, ip.Protocol))
+		case layers.LayerTypeIPv6:
+			ip := netLayer.(*layers.IPv6)
+			writeLine(fmt.Sprintf("L3 (IPv6): %s → %s (Hop Limit: %d, Next Header: %s)", ip.SrcIP, ip.DstIP, ip.HopLimit, ip.NextHeader))
+		default:
+			writeLine(fmt.Sprintf("L3 (Не IP): %s", netLayer.LayerType()))
+		}
+	}
+
+	// ----------------------------------------------------
+	// L4: Транспортный уровень (TCP, UDP, ICMP)
+	// ----------------------------------------------------
+	if transportLayer := packet.TransportLayer(); transportLayer != nil {
+		switch transportLayer.LayerType() {
+		case layers.LayerTypeTCP:
+			tcp := transportLayer.(*layers.TCP)
+			flags := getTCPFlags(tcp)
+			writeLine(fmt.Sprintf("L4 (TCP): Port %d → %d (Seq: %d, Ack: %d, Flags: %s)", tcp.SrcPort, tcp.DstPort, tcp.Seq, tcp.Ack, flags))
+		case layers.LayerTypeUDP:
+			udp := transportLayer.(*layers.UDP)
+			writeLine(fmt.Sprintf("L4 (UDP): Port %d → %d (Length: %d)", udp.SrcPort, udp.DstPort, udp.Length))
+		default:
+			writeLine(fmt.Sprintf("L4: %s", transportLayer.LayerType()))
+		}
+	}
+
+	// ----------------------------------------------------
+	// Полезная нагрузка (Если это не TCP/UDP, то полезные данные)
+	// ----------------------------------------------------
+	if appLayer := packet.ApplicationLayer(); appLayer != nil {
+		// Если это DNS-пакет, gopacket его распознает и его можно вывести
+		if dnsLayer := packet.Layer(layers.LayerTypeDNS); dnsLayer != nil {
+			dns := dnsLayer.(*layers.DNS)
+			if len(dns.Questions) > 0 {
+				q := dns.Questions[0]
+				// Выводим данные запроса (например, accounts.youtube.com)
+				writeLine(fmt.Sprintf("L7 (DNS): Запрос: %s (Тип %s)", q.Name, q.Type))
+			}
+		}
+
+		// Если это просто данные приложения, можно вывести их длину
+		payload := appLayer.Payload()
+		if len(payload) > 0 {
+			writeLine(fmt.Sprintf("L7 (Payload): Длина: %d байт", len(payload)))
+		}
+	}
+
+	writeLine(strings.Repeat("-", 80))
 	writeLine("Полный кадр в hex (как на проводе):")
 	hexDump(data)
-
 	writeLine("")
 }
 
+// Улучшенная функция для вывода флагов TCP
+func getTCPFlags(tcp *layers.TCP) string {
+	var flags []string
+	if tcp.FIN {
+		flags = append(flags, "FIN")
+	}
+	if tcp.SYN {
+		flags = append(flags, "SYN")
+	}
+	if tcp.RST {
+		flags = append(flags, "RST")
+	}
+	if tcp.PSH {
+		flags = append(flags, "PSH")
+	}
+	if tcp.ACK {
+		flags = append(flags, "ACK")
+	}
+	if tcp.URG {
+		flags = append(flags, "URG")
+	}
+	if tcp.ECE {
+		flags = append(flags, "ECE")
+	}
+	if tcp.CWR {
+		flags = append(flags, "CWR")
+	}
+	return strings.Join(flags, "|")
+}
+
+// Функция для вывода шестнадцатеричного дампа
 func hexDump(data []byte) {
 	const bytesPerLine = 16
 	for i := 0; i < len(data); i += bytesPerLine {
@@ -170,44 +258,35 @@ func hexDump(data []byte) {
 				ascii += "."
 			}
 			if j == 7 {
-				hex += " "
+				hex += " " // Дополнительный пробел между 8-м и 9-м байтом
 			}
 		}
 
 		// Дополняем пробелами короткие строки
-		for len(hex) < 48 {
-			hex += "   "
+		for len(hex) < 49 {
+			hex += " "
 		}
 
-		// Подсвечиваем важные части (простая эвристика)
+		// Эвристика префиксов (убрал FCS, так как его редко захватывают)
 		prefix := "   "
-		if i == 0 && len(data) >= 8 && data[0] == 0x55 && data[6] == 0x55 && data[7] == 0xD5 {
-			prefix = "ПРМ" // Преамбула (если Npcap её захватил)
-		} else if i < 6 {
+		if i == 0 {
 			prefix = "Dst" // Destination MAC
-		} else if i < 12 {
+		} else if i == 6 {
 			prefix = "Src" // Source MAC
-		} else if i == 12 && len(data) > 16 && data[12] == 0x81 && data[13] == 0x00 {
-			prefix = "VLN" // VLAN-тег
-		} else if i >= len(data)-4 && i < len(data) {
-			prefix = "FCS" // Frame Check Sequence
+		} else if i == 12 {
+			prefix = "Type" // EtherType
 		}
 
 		writeLine(fmt.Sprintf("%04X  %s %s %s", i, prefix, hex, ascii))
 	}
 }
 
+// Вспомогательная функция для записи в консоль и файл
 func writeLine(s string) {
 	fmt.Println(s)
 	outputFile.WriteString(s + "\n")
 	if err := outputFile.Sync(); err != nil {
-		fmt.Printf("Ошибка записи: %v\n", err)
+		// Ошибка записи: %v
+		// Пропускаем вывод ошибки, чтобы не загромождать консоль
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
