@@ -101,9 +101,12 @@
 
 ### Описания кода программы
 
-* **установка зависимостей**
 
-- go get github.com/google/gopacket
-- go get github.com/google/gopacket/layers
-- go get github.com/google/gopacket/pcap
-- обязательно нужно установить Npcap — библиотека для захвата сетевых пакетов на Windows
+* создание go.mod в корне проекта: 
+* go mod init myproject
+* 
+* установка зависимостей:
+* go get github.com/google/gopacket 
+* go get github.com/google/gopacket/layers 
+* go get github.com/google/gopacket/pcap 
+* обязательно нужно установить Npcap — библиотека для захвата сетевых пакетов на Windows
