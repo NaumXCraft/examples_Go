@@ -98,3 +98,12 @@
 
 
 Всё. Больше от Ethernet ничего не остаётся — сетевой уровень получает абсолютно чистый IP-пакет, как будто его по воздуху передали.
+
+### Описания кода программы
+
+* **установка зависимостей**
+
+- go get github.com/google/gopacket
+- go get github.com/google/gopacket/layers
+- go get github.com/google/gopacket/pcap
+- обязательно нужно установить Npcap — библиотека для захвата сетевых пакетов на Windows

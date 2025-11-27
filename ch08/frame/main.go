@@ -110,7 +110,7 @@ func main() {
 	for packet := range packetSource.Packets() {
 		counter++
 		printFrame(packet, counter)
-		if counter >= 100 { // Убрал > 100 на >= 100
+		if counter >= 100 {
 			fmt.Println("\nЗахвачено 100 кадров. Останавливаю. Проверь frames.txt!")
 			break
 		}
