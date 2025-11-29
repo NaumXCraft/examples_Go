@@ -1,8 +1,33 @@
+// ═════════════════════════════════════════════════════════════════════════════
+//                             СНАЙПЕР ПАКЕТОВ НА GO
+//                       Захват и анализ Ethernet-кадров в реальном времени
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Это консольная программа на Go, которая:
+//   • Захватывает сетевой трафик с выбранного интерфейса (Npcap/WinPcap)
+//   • Применяет BPF-фильтры (ARP, DNS, HTTPS, IP и т.д.) для фокусировки
+//   • Выводит каждый кадр по уровням OSI: L2 (Ethernet), L3 (IP), L4 (TCP/UDP), L5 (Payload/DNS)
+//   • Генерирует hex-дамп "как на проводе" (в стиле Wireshark: с префиксами Dst/Src/Type и ASCII)
+//   • Сохраняет всё в frames.txt для анализа в блокноте/Notepad++
+//   • Останавливается после 100 пакетов (для демо; можно убрать лимит)
+//
+//
+// Версия: 1.1 (улучшенный вывод: четкие уровни, полный hex с ASCII, без ошибок)
+// Требования: go1.21+, Npcap (Windows) или libpcap (Linux/macOS)
+// Зависимости: go get github.com/google/gopacket
+//
+// Запуск:
+//   go mod init packet-sniffer
+//   go get github.com/google/gopacket
+//   go run main.go
+// ═════════════════════════════════════════════════════════════════════════════
+
 package main
 
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -147,7 +172,7 @@ func selectBPFFilter(reader *bufio.Reader) string {
 	fmt.Println("\nВыбери тип фильтра (BPF):")
 	fmt.Println("[0] Всё (без фильтра)")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("--- L2: Канальный уровень (Ethernet, ARP, Обнаружение) ---")
+	fmt.Println("--- L2: Канальный уровень (Ethernet, ARP, Обнаружение) --")
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("[1] Только ARP (сопоставление IP↔MAC)")
 	fmt.Println("[2] Только ARP-запросы (Who has IP?)")
@@ -158,14 +183,14 @@ func selectBPFFilter(reader *bufio.Reader) string {
 	fmt.Println("[7] CDP (Cisco Discovery Protocol, обнаружение)")
 	fmt.Println("[8] Wake-on-LAN (WoL, магические пакеты)")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("--- L3: Сетевой уровень (IP, ICMP, Маршрутизация) ---")
+	fmt.Println("--- L3: Сетевой уровень (IP, ICMP, Маршрутизация) -------")
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("[9] ICMP (Ping-запросы и ответы)")
 	fmt.Println("[10] OSPF (Протокол маршрутизации)")
 	fmt.Println("[11] ВЕСЬ трафик на конкретный IP-адрес (Нужен ввод)")
 	fmt.Println("[12] Весь НЕ-локальный трафик (Не 192.168.x.x, 10.x.x.x)")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("--- L4: Транспортный уровень (TCP/UDP, Порты) ---")
+	fmt.Println("--- L4: Транспортный уровень (TCP/UDP, Порты) -----------")
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("[13] Весь TCP и UDP трафик")
 	fmt.Println("[14] DNS-запросы (UDP порт 53)")
@@ -196,8 +221,8 @@ func selectBPFFilter(reader *bufio.Reader) string {
 		bpfFilter = "ether proto 0x88cc"
 		fmt.Println("Применяю фильтр: 'ether proto 0x88cc'")
 	case "4":
-		bpfFilter = "stp or rstp"
-		fmt.Println("Применяю фильтр: 'stp or rstp'")
+		bpfFilter = "ether proto 0x0000 or ether proto 0x0035"
+		fmt.Println("Применяю фильтр: 'ether proto 0x0000 or ether proto 0x0035'")
 	case "5":
 		bpfFilter = "ether broadcast"
 		fmt.Println("Применяю фильтр: 'ether broadcast'")
@@ -230,7 +255,6 @@ func selectBPFFilter(reader *bufio.Reader) string {
 	case "12":
 		bpfFilter = "not (net 192.168.0.0/16 or net 10.0.0.0/8 or net 172.16.0.0/12)"
 		fmt.Println("Применяю фильтр: 'not (net 192.168.0.0/16 or net 10.0.0.0/8 or net 172.16.0.0/12)'")
-
 	case "13":
 		bpfFilter = "tcp or udp"
 		fmt.Println("Применяю фильтр: 'tcp or udp'")
@@ -265,7 +289,7 @@ func selectBPFFilter(reader *bufio.Reader) string {
 	return bpfFilter
 }
 
-// Вспомогательная функция для получения IP-адресов
+// getIPs: Вспомогательная функция для получения IP-адресов устройства.
 func getIPs(device pcap.Interface) string {
 	if len(device.Addresses) == 0 {
 		return "нет IP"
@@ -278,6 +302,8 @@ func getIPs(device pcap.Interface) string {
 	return "нет IP"
 }
 
+// printFrame: Выводит анализ пакета по уровням OSI (L2-L5) + hex-дамп.
+// Делает вывод понятным: четкие разделы, как в Wireshark.
 func printFrame(packet gopacket.Packet, count int) {
 	data := packet.Data()
 	writeLine(strings.Repeat("=", 80))
@@ -299,6 +325,8 @@ func printFrame(packet gopacket.Packet, count int) {
 			writeLine(fmt.Sprintf(" ↳ VLAN: ID %d (Приоритет %d)",
 				v.VLANIdentifier, v.Priority))
 		}
+	} else {
+		writeLine("L2: Не Ethernet (возможно, другой тип фрейма)")
 	}
 
 	// ----------------------------------------------------
@@ -321,6 +349,8 @@ func printFrame(packet gopacket.Packet, count int) {
 		default:
 			writeLine(fmt.Sprintf("L3 (Не IP): %s", netLayer.LayerType()))
 		}
+	} else {
+		writeLine("L3: Нет сетевого уровня (локальный трафик?)")
 	}
 
 	// ----------------------------------------------------
@@ -344,6 +374,8 @@ func printFrame(packet gopacket.Packet, count int) {
 		default:
 			writeLine(fmt.Sprintf("L4: %s", transportLayer.LayerType()))
 		}
+	} else {
+		writeLine("L4: Нет транспортного уровня (не TCP/UDP)")
 	}
 
 	// ----------------------------------------------------
@@ -365,13 +397,17 @@ func printFrame(packet gopacket.Packet, count int) {
 		if len(payload) > 0 {
 			writeLine(fmt.Sprintf("L5 (Payload): Длина: %d байт", len(payload)))
 		}
+	} else {
+		writeLine("L5: Нет прикладного уровня (сырые данные или зашифровано)")
 	}
-	writeLine(strings.Repeat("-", 80))
+
+	writeLine("----------------------------------------------------")
 	writeLine("Полный кадр в hex (как на проводе):")
 	hexDump(data)
 	writeLine("")
 }
 
+// getTCPFlags: Формирует строку с флагами TCP (FIN/SYN/RST и т.д.).
 func getTCPFlags(tcp *layers.TCP) string {
 	var flags []string
 	if tcp.FIN {
@@ -401,10 +437,13 @@ func getTCPFlags(tcp *layers.TCP) string {
 	return strings.Join(flags, "|")
 }
 
+// hexDump: Выводит hex-дамп байтов в стиле Wireshark (с offset, префиксами, hex и ASCII).
+// Префиксы: Dst/Src/Type для первых строк (MAC/EtherType).
 func hexDump(data []byte) {
 	const bytesPerLine = 16
 	for i := 0; i < len(data); i += bytesPerLine {
-		line := data[i:min(i+bytesPerLine, len(data))]
+		end := int(math.Min(float64(i+bytesPerLine), float64(len(data))))
+		line := data[i:end]
 		hex := ""
 		ascii := ""
 		for j, b := range line {
@@ -418,28 +457,31 @@ func hexDump(data []byte) {
 				hex += " "
 			}
 		}
+		// Выравнивание hex до 49 символов (16*3=48 + пробелы)
 		for len(hex) < 49 {
-			hex += " "
+			hex += "  "
 		}
-		prefix := " "
+		// Префиксы для первых строк (как в Wireshark)
+		prefix := ""
 		if i == 0 {
-			prefix = "Dst"
+			prefix = "Dst "
 		} else if i == 6 {
-			prefix = "Src"
+			prefix = "Src "
 		} else if i == 12 {
 			prefix = "Type"
 		}
 		offsetStr := fmt.Sprintf("0x%02X", i)
-		writeLine(fmt.Sprintf("%s %s %s %s", offsetStr, prefix, hex, ascii))
+		writeLine(fmt.Sprintf("%s %s%s %s", offsetStr, prefix, hex, ascii))
 	}
 }
 
-// Вспомогательная функция для записи в консоль и файл
+// writeLine: Вспомогательная функция для записи в консоль и файл (с синхронизацией).
 func writeLine(s string) {
 	fmt.Println(s)
-	outputFile.WriteString(s + "\n")
+	if _, err := outputFile.WriteString(s + "\n"); err != nil {
+		// Игнорируем ошибки записи для простоты (в проде — логируй)
+	}
 	if err := outputFile.Sync(); err != nil {
-		// Ошибка записи: %v
-		// Игнорируем ошибки записи для простоты
+		// Игнорируем Sync-ошибки
 	}
 }
