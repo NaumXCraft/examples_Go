@@ -146,16 +146,34 @@ func openInterface(device pcap.Interface) (*pcap.Handle, error) {
 func selectBPFFilter(reader *bufio.Reader) string {
 	fmt.Println("\nВыбери тип фильтра (BPF):")
 	fmt.Println("[0] Всё (без фильтра)")
-	fmt.Println("[1] TCP/UDP по портам (пример: tcp port 80 or udp port 53)")
-	fmt.Println("[2] ICMP (ping)")
-	fmt.Println("[3] Служебные L2-протоколы (ARP, LLDP, CDP, GARP, GVRP, MACsec)")
-	fmt.Println("[4] Только ARP*")
-	fmt.Println("[5] Только LLDP")
-	fmt.Println("[6] Только CDP")
-	fmt.Println("[7] Только GARP/GVRP")
-	fmt.Println("[8] Только MACsec")
-	fmt.Println("[9] DNS-запросы (udp port 53)")
-	fmt.Print("Или введи свой фильтр (Enter для всего): ")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("--- L4: Транспортный уровень (TCP/UDP, Порты) ---")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("[1] Весь TCP и UDP трафик")
+	fmt.Println("[2] DNS-запросы (UDP порт 53)")
+	fmt.Println("[3] HTTPS (TCP порт 443)")
+	fmt.Println("[4] HTTP (TCP порт 80)")
+	fmt.Println("[5] SSH (TCP порт 22)")
+	fmt.Println("[6] RDP (Remote Desktop, TCP порт 3389)")
+	fmt.Println("[7] SMB (File Share, TCP порт 445)")
+	fmt.Println("[8] SMTP/POP3/IMAP (Email-трафик)")
+	fmt.Println("[9] Syslog (UDP порт 514)")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("--- L3: Сетевой уровень (IP, Управление) ---")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("[10] ICMP (Ping-запросы и ответы)")
+	fmt.Println("[11] OSPF (Протокол маршрутизации)")
+	fmt.Println("[12] ВЕСЬ трафик на конкретный IP-адрес (Нужен ввод)")
+	fmt.Println("[13] Весь НЕ-локальный трафик (Не 192.168.x.x, 10.x.x.x)")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("--- L2/L3: Канальный уровень (Обнаружение, Управление) ---")
+	fmt.Println("---------------------------------------------------------")
+	fmt.Println("[14] Только ARP (сопоставление IP↔MAC)")
+	fmt.Println("[15] Только ARP-запросы (Who has IP?)")
+	fmt.Println("[16] Только LLDP (обнаружение соседей)")
+	fmt.Println("[17] Только STP/RSTP (Spanning Tree, предотвращение петель)")
+
+	fmt.Print("\nИли введи свой фильтр (Пример: 'host 8.8.8.8 and not port 53'): ")
 
 	filterInput, _ := reader.ReadString('\n')
 	filterInput = strings.TrimSpace(filterInput)
@@ -164,29 +182,56 @@ func selectBPFFilter(reader *bufio.Reader) string {
 	switch filterInput {
 	case "0", "":
 		bpfFilter = ""
+	// --- L4 Filters ---
 	case "1":
 		bpfFilter = "tcp or udp"
-		fmt.Println("Фильтр: tcp or udp (добавь порты вручную, если нужно)")
+		fmt.Println("Применяю фильтр: 'tcp or udp'")
 	case "2":
-		bpfFilter = "icmp"
-	case "3":
-		bpfFilter = "arp or ether proto 0x88cc or ether proto 0x2000 or ether proto 0x886d or stp or ether proto 0x88e5"
-		fmt.Println("Фильтр: ARP | LLDP | CDP | GARP/GVRP | MACsec")
-	case "4":
-		bpfFilter = "arp"
-	case "5":
-		bpfFilter = "ether proto 0x88cc"
-	case "6":
-		bpfFilter = "ether proto 0x2000"
-	case "7":
-		bpfFilter = "ether proto 0x886d or stp"
-	case "8":
-		bpfFilter = "ether proto 0x88e5"
-	case "9":
 		bpfFilter = "udp port 53"
+	case "3":
+		bpfFilter = "tcp port 443"
+	case "4":
+		bpfFilter = "tcp port 80"
+	case "5":
+		bpfFilter = "tcp port 22"
+	case "6":
+		bpfFilter = "tcp port 3389"
+	case "7":
+		bpfFilter = "tcp port 445"
+	case "8":
+		bpfFilter = "tcp port 25 or tcp port 110 or tcp port 995 or tcp port 143 or tcp port 993"
+	case "9":
+		bpfFilter = "udp port 514"
+	// --- L3 Filters ---
+	case "10":
+		bpfFilter = "icmp or icmp6"
+	case "11":
+		bpfFilter = "proto ospf"
+	case "12":
+		fmt.Print("Введите IP-адрес для фильтрации (например, 8.8.8.8): ")
+		ipInput, _ := reader.ReadString('\n')
+		ipInput = strings.TrimSpace(ipInput)
+		if ipInput != "" {
+			bpfFilter = fmt.Sprintf("host %s", ipInput)
+		} else {
+			fmt.Println("IP-адрес не введен. Фильтр отменен.")
+			bpfFilter = ""
+		}
+	case "13":
+		// Фильтр для частных диапазонов IP
+		bpfFilter = "not (net 192.168.0.0/16 or net 10.0.0.0/8 or net 172.16.0.0/12)"
+	// --- L2/L3 Filters ---
+	case "14":
+		bpfFilter = "arp"
+	case "15":
+		// ARP operation code: Request = 1
+		bpfFilter = "arp and arp[7] == 1"
+	case "16":
+		bpfFilter = "ether proto 0x88cc" // LLDP
+	case "17":
+		bpfFilter = "stp or rstp" // STP и RSTP
 	default:
 		bpfFilter = filterInput
-		fmt.Printf("Применяю пользовательский фильтр: '%s'\n", bpfFilter)
 	}
 	return bpfFilter
 }
