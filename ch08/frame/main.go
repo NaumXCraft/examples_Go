@@ -38,7 +38,37 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+// --- Глобальные переменные и Константы ---
+// outputFile остаётся глобальной для упрощения записи логов из любой функции.
 var outputFile *os.File
+
+// Константы для выбора BPF-фильтра: делают код в selectBPFFilter более читабельным.
+const (
+	FilterNone       = "0"
+	FilterARP        = "1"
+	FilterARPRequest = "2"
+	FilterLLDP       = "3"
+	FilterSTP        = "4"
+	FilterBroadcast  = "5"
+	FilterVLAN       = "6"
+	FilterCDP        = "7"
+	FilterWoL        = "8"
+	FilterICMP       = "9"
+	FilterOSPF       = "10"
+	FilterHost       = "11"
+	FilterNotLocal   = "12"
+	FilterTCPUDP     = "13"
+	FilterDNS        = "14"
+	FilterHTTPS      = "15"
+	FilterHTTP       = "16"
+	FilterSSH        = "17"
+	FilterRDP        = "18"
+	FilterSMB        = "19"
+	FilterEmail      = "20"
+	FilterSyslog     = "21"
+)
+
+// --- Основная Логика (main) ---
 
 func main() {
 	// Инициализация: файл, заголовок, поиск устройств.
@@ -72,7 +102,7 @@ func main() {
 	if bpfFilter != "" {
 		if err := handle.SetBPFFilter(bpfFilter); err != nil {
 			fmt.Printf("Ошибка фильтра BPF: %v. Ловим весь трафик.\n", err)
-			bpfFilter = ""
+			bpfFilter = "" // Сбрасываем фильтр, если он не сработал
 		} else {
 			fmt.Printf("Применён фильтр: '%s'\n", bpfFilter)
 		}
@@ -99,8 +129,15 @@ func main() {
 	}
 }
 
+// --- Вспомогательные Функции ---
+
+// readInput: Вспомогательная функция для чтения и очистки ввода.
+func readInput(reader *bufio.Reader) string {
+	input, _ := reader.ReadString('\n')
+	return strings.TrimSpace(input)
+}
+
 // initOutputFile: Инициализация файла лога и вывод заголовка.
-// Возвращает error для обработки в main.
 func initOutputFile() error {
 	var err error
 	outputFile, err = os.OpenFile("frames.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
@@ -114,7 +151,6 @@ func initOutputFile() error {
 }
 
 // findDevices: Поиск всех сетевых интерфейсов.
-// Возвращает список и error (для обработки в main).
 func findDevices() ([]pcap.Interface, error) {
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
@@ -124,8 +160,6 @@ func findDevices() ([]pcap.Interface, error) {
 }
 
 // selectDevice: Интерактивный выбор сетевого интерфейса.
-// Принимает reader и список устройств, возвращает выбранный.
-// Авто-выбор: первый с IP, fallback — первый в списке.
 func selectDevice(reader *bufio.Reader, devices []pcap.Interface) pcap.Interface {
 	fmt.Println("\nДоступные интерфейсы:")
 	for i, device := range devices {
@@ -133,8 +167,7 @@ func selectDevice(reader *bufio.Reader, devices []pcap.Interface) pcap.Interface
 	}
 	fmt.Print("Выбери номер интерфейса (Enter для авто-выбора с IP): ")
 
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
+	input := readInput(reader) // Используем новую вспомогательную функцию
 
 	var selectedDevice pcap.Interface
 	if input == "" {
@@ -161,131 +194,111 @@ func selectDevice(reader *bufio.Reader, devices []pcap.Interface) pcap.Interface
 }
 
 // openInterface: Открытие выбранного интерфейса для захвата.
-// SnapLen 65536, Promiscuous mode, BlockForever.
 func openInterface(device pcap.Interface) (*pcap.Handle, error) {
+	// 65536 - максимальная длина снимка (SnapLen), true - promiscuous mode (режим "все вижу")
 	return pcap.OpenLive(device.Name, 65536, true, pcap.BlockForever)
 }
 
 // selectBPFFilter: Выбор BPF-фильтра через меню.
-// Принимает reader, возвращает string фильтра.
 func selectBPFFilter(reader *bufio.Reader) string {
 	fmt.Println("\nВыбери тип фильтра (BPF):")
-	fmt.Println("[0] Всё (без фильтра)")
+	fmt.Printf("[%s] Всё (без фильтра)\n", FilterNone)
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("--- L2: Канальный уровень (Ethernet, ARP, Обнаружение) --")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("[1] Только ARP (сопоставление IP↔MAC)")
-	fmt.Println("[2] Только ARP-запросы (Who has IP?)")
-	fmt.Println("[3] Только LLDP (обнаружение соседей)")
-	fmt.Println("[4] Только STP/RSTP (Spanning Tree, предотвращение петель)")
-	fmt.Println("[5] Ethernet broadcast (широковещательные фреймы)")
-	fmt.Println("[6] VLAN-tagged frames (помеченные VLAN)")
-	fmt.Println("[7] CDP (Cisco Discovery Protocol, обнаружение)")
-	fmt.Println("[8] Wake-on-LAN (WoL, магические пакеты)")
+	fmt.Printf("[%s] Только ARP (сопоставление IP↔MAC)\n", FilterARP)
+	fmt.Printf("[%s] Только ARP-запросы (Who has IP?)\n", FilterARPRequest)
+	fmt.Printf("[%s] Только LLDP (обнаружение соседей)\n", FilterLLDP)
+	fmt.Printf("[%s] Только STP/RSTP (Spanning Tree, предотвращение петель)\n", FilterSTP)
+	fmt.Printf("[%s] Ethernet broadcast (широковещательные фреймы)\n", FilterBroadcast)
+	fmt.Printf("[%s] VLAN-tagged frames (помеченные VLAN)\n", FilterVLAN)
+	fmt.Printf("[%s] CDP (Cisco Discovery Protocol, обнаружение)\n", FilterCDP)
+	fmt.Printf("[%s] Wake-on-LAN (WoL, магические пакеты)\n", FilterWoL)
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("--- L3: Сетевой уровень (IP, ICMP, Маршрутизация) -------")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("[9] ICMP (Ping-запросы и ответы)")
-	fmt.Println("[10] OSPF (Протокол маршрутизации)")
-	fmt.Println("[11] ВЕСЬ трафик на конкретный IP-адрес (Нужен ввод)")
-	fmt.Println("[12] Весь НЕ-локальный трафик (Не 192.168.x.x, 10.x.x.x)")
+	fmt.Printf("[%s] ICMP (Ping-запросы и ответы)\n", FilterICMP)
+	fmt.Printf("[%s] OSPF (Протокол маршрутизации)\n", FilterOSPF)
+	fmt.Printf("[%s] ВЕСЬ трафик на конкретный IP-адрес (Нужен ввод)\n", FilterHost)
+	fmt.Printf("[%s] Весь НЕ-локальный трафик (Не 192.168.x.x, 10.x.x.x)\n", FilterNotLocal)
 	fmt.Println("---------------------------------------------------------")
 	fmt.Println("--- L4: Транспортный уровень (TCP/UDP, Порты) -----------")
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("[13] Весь TCP и UDP трафик")
-	fmt.Println("[14] DNS-запросы (UDP порт 53)")
-	fmt.Println("[15] HTTPS (TCP порт 443)")
-	fmt.Println("[16] HTTP (TCP порт 80)")
-	fmt.Println("[17] SSH (TCP порт 22)")
-	fmt.Println("[18] RDP (Remote Desktop, TCP порт 3389)")
-	fmt.Println("[19] SMB (File Share, TCP порт 445)")
-	fmt.Println("[20] SMTP/POP3/IMAP (Email-трафик)")
-	fmt.Println("[21] Syslog (UDP порт 514)")
+	fmt.Printf("[%s] Весь TCP и UDP трафик\n", FilterTCPUDP)
+	fmt.Printf("[%s] DNS-запросы (UDP порт 53)\n", FilterDNS)
+	fmt.Printf("[%s] HTTPS (TCP порт 443)\n", FilterHTTPS)
+	fmt.Printf("[%s] HTTP (TCP порт 80)\n", FilterHTTP)
+	fmt.Printf("[%s] SSH (TCP порт 22)\n", FilterSSH)
+	fmt.Printf("[%s] RDP (Remote Desktop, TCP порт 3389)\n", FilterRDP)
+	fmt.Printf("[%s] SMB (File Share, TCP порт 445)\n", FilterSMB)
+	fmt.Printf("[%s] SMTP/POP3/IMAP (Email-трафик)\n", FilterEmail)
+	fmt.Printf("[%s] Syslog (UDP порт 514)\n", FilterSyslog)
 
 	fmt.Print("\nИли введи свой фильтр (Пример: 'host 8.8.8.8 and not port 53'): ")
 
-	filterInput, _ := reader.ReadString('\n')
-	filterInput = strings.TrimSpace(filterInput)
+	filterInput := readInput(reader) // Используем новую вспомогательную функцию
 
 	var bpfFilter string
 	switch filterInput {
-	case "0", "":
+	case FilterNone, "":
 		bpfFilter = ""
-	case "1":
+	case FilterARP:
 		bpfFilter = "arp"
-		fmt.Println("Применяю фильтр: 'arp'")
-	case "2":
+	case FilterARPRequest:
 		bpfFilter = "arp and arp[7] == 1"
-		fmt.Println("Применяю фильтр: 'arp and arp[7] == 1'")
-	case "3":
+	case FilterLLDP:
 		bpfFilter = "ether proto 0x88cc"
-		fmt.Println("Применяю фильтр: 'ether proto 0x88cc'")
-	case "4":
+	case FilterSTP:
 		bpfFilter = "ether proto 0x0000 or ether proto 0x0035"
-		fmt.Println("Применяю фильтр: 'ether proto 0x0000 or ether proto 0x0035'")
-	case "5":
+	case FilterBroadcast:
 		bpfFilter = "ether broadcast"
-		fmt.Println("Применяю фильтр: 'ether broadcast'")
-	case "6":
+	case FilterVLAN:
 		bpfFilter = "vlan"
-		fmt.Println("Применяю фильтр: 'vlan'")
-	case "7":
+	case FilterCDP:
 		bpfFilter = "ether[12:2] == 0x2000"
-		fmt.Println("Применяю фильтр: 'ether[12:2] == 0x2000'")
-	case "8":
-		bpfFilter = "ether[0:6] == 0xffffffff and udp port 9"
-		fmt.Println("Применяю фильтр: 'ether[0:6] == 0xffffffff and udp port 9'")
-	case "9":
+	case FilterWoL:
+		bpfFilter = "ether[0:6] == 0xffffffff and udp port 9" // Простой WoL-фильтр
+	case FilterICMP:
 		bpfFilter = "icmp or icmp6"
-		fmt.Println("Применяю фильтр: 'icmp or icmp6'")
-	case "10":
+	case FilterOSPF:
 		bpfFilter = "proto ospf"
-		fmt.Println("Применяю фильтр: 'proto ospf'")
-	case "11":
+	case FilterHost:
 		fmt.Print("Введите IP-адрес для фильтрации (например, 8.8.8.8): ")
-		ipInput, _ := reader.ReadString('\n')
-		ipInput = strings.TrimSpace(ipInput)
+		ipInput := readInput(reader) // Используем вспомогательную функцию
 		if ipInput != "" {
 			bpfFilter = fmt.Sprintf("host %s", ipInput)
-			fmt.Printf("Применяю фильтр: 'host %s'\n", ipInput)
 		} else {
 			fmt.Println("IP-адрес не введен. Фильтр отменен.")
 			bpfFilter = ""
 		}
-	case "12":
+	case FilterNotLocal:
 		bpfFilter = "not (net 192.168.0.0/16 or net 10.0.0.0/8 or net 172.16.0.0/12)"
-		fmt.Println("Применяю фильтр: 'not (net 192.168.0.0/16 or net 10.0.0.0/8 or net 172.16.0.0/12)'")
-	case "13":
+	case FilterTCPUDP:
 		bpfFilter = "tcp or udp"
-		fmt.Println("Применяю фильтр: 'tcp or udp'")
-	case "14":
+	case FilterDNS:
 		bpfFilter = "udp port 53"
-		fmt.Println("Применяю фильтр: 'udp port 53'")
-	case "15":
+	case FilterHTTPS:
 		bpfFilter = "tcp port 443"
-		fmt.Println("Применяю фильтр: 'tcp port 443'")
-	case "16":
+	case FilterHTTP:
 		bpfFilter = "tcp port 80"
-		fmt.Println("Применяю фильтр: 'tcp port 80'")
-	case "17":
+	case FilterSSH:
 		bpfFilter = "tcp port 22"
-		fmt.Println("Применяю фильтр: 'tcp port 22'")
-	case "18":
+	case FilterRDP:
 		bpfFilter = "tcp port 3389"
-		fmt.Println("Применяю фильтр: 'tcp port 3389'")
-	case "19":
+	case FilterSMB:
 		bpfFilter = "tcp port 445"
-		fmt.Println("Применяю фильтр: 'tcp port 445'")
-	case "20":
+	case FilterEmail:
 		bpfFilter = "tcp port 25 or tcp port 110 or tcp port 995 or tcp port 143 or tcp port 993"
-		fmt.Println("Применяю фильтр: 'tcp port 25 or tcp port 110 or tcp port 995 or tcp port 143 or tcp port 993'")
-	case "21":
+	case FilterSyslog:
 		bpfFilter = "udp port 514"
-		fmt.Println("Применяю фильтр: 'udp port 514'")
 	default:
 		bpfFilter = filterInput
-		// Проверка фильтра будет выполнена в main
 	}
+
+	if bpfFilter != "" && filterInput != FilterNone && filterInput != "" {
+		fmt.Printf("Применяю фильтр: '%s'\n", bpfFilter)
+	}
+
 	return bpfFilter
 }
 
@@ -295,6 +308,11 @@ func getIPs(device pcap.Interface) string {
 		return "нет IP"
 	}
 	for _, addr := range device.Addresses {
+		if addr.IP != nil && addr.IP.To4() != nil { // Предпочитаем IPv4
+			return addr.IP.String()
+		}
+	}
+	for _, addr := range device.Addresses { // Если нет IPv4, берем IPv6
 		if addr.IP != nil {
 			return addr.IP.String()
 		}
@@ -303,23 +321,20 @@ func getIPs(device pcap.Interface) string {
 }
 
 // printFrame: Выводит анализ пакета по уровням OSI (L2-L5) + hex-дамп.
-// Делает вывод понятным: четкие разделы, как в Wireshark.
 func printFrame(packet gopacket.Packet, count int) {
 	data := packet.Data()
 	writeLine(strings.Repeat("=", 80))
 	writeLine(fmt.Sprintf("#%d | Время: %s | Общая Длина: %d байт",
 		count, time.Now().Format("15:04:05.000"), len(data)))
 
-	// ----------------------------------------------------
 	// L2: Канальный уровень (Ethernet, MAC-адреса, EtherType, VLAN)
-	// ----------------------------------------------------
 	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
 		eth := ethLayer.(*layers.Ethernet)
 		writeLine(fmt.Sprintf(
 			"L2 (Ethernet): %s → %s (EtherType: %s 0x%04x)",
 			eth.SrcMAC, eth.DstMAC, eth.EthernetType, uint16(eth.EthernetType),
 		))
-		// Проверяем на VLAN (802.1Q): теги для виртуальных LAN.
+		// Проверяем на VLAN (802.1Q)
 		if vlan := packet.Layer(layers.LayerTypeDot1Q); vlan != nil {
 			v := vlan.(*layers.Dot1Q)
 			writeLine(fmt.Sprintf(" ↳ VLAN: ID %d (Приоритет %d)",
@@ -329,9 +344,7 @@ func printFrame(packet gopacket.Packet, count int) {
 		writeLine("L2: Не Ethernet (возможно, другой тип фрейма)")
 	}
 
-	// ----------------------------------------------------
 	// L3: Сетевой уровень (IP-адреса, маршрутизация, TTL/HopLimit)
-	// ----------------------------------------------------
 	if netLayer := packet.NetworkLayer(); netLayer != nil {
 		switch netLayer.LayerType() {
 		case layers.LayerTypeIPv4:
@@ -350,12 +363,21 @@ func printFrame(packet gopacket.Packet, count int) {
 			writeLine(fmt.Sprintf("L3 (Не IP): %s", netLayer.LayerType()))
 		}
 	} else {
-		writeLine("L3: Нет сетевого уровня (локальный трафик?)")
+		// ARP, RARP и другие протоколы L2/L3 без IP-заголовка
+		if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
+			arp := arpLayer.(*layers.ARP)
+			op := "REQUEST"
+			if arp.Operation == layers.ARPReply {
+				op = "REPLY"
+			}
+			writeLine(fmt.Sprintf("L3 (ARP): Операция: %s, %s (MAC: %s) → %s (MAC: %s)",
+				op, arp.SourceProtAddress, arp.SourceHwAddress, arp.DstProtAddress, arp.DstHwAddress))
+		} else {
+			writeLine("L3: Нет сетевого уровня (локальный трафик?)")
+		}
 	}
 
-	// ----------------------------------------------------
 	// L4: Транспортный уровень (TCP/UDP, порты, Seq/Ack, флаги)
-	// ----------------------------------------------------
 	if transportLayer := packet.TransportLayer(); transportLayer != nil {
 		switch transportLayer.LayerType() {
 		case layers.LayerTypeTCP:
@@ -378,9 +400,7 @@ func printFrame(packet gopacket.Packet, count int) {
 		writeLine("L4: Нет транспортного уровня (не TCP/UDP)")
 	}
 
-	// ----------------------------------------------------
 	// L5: Прикладной уровень (DNS, HTTP, TLS, прочий payload)
-	// ----------------------------------------------------
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
 		if dnsLayer := packet.Layer(layers.LayerTypeDNS); dnsLayer != nil {
 			dns := dnsLayer.(*layers.DNS)
@@ -390,6 +410,8 @@ func printFrame(packet gopacket.Packet, count int) {
 					"L5 (DNS): Запрос: %s (Тип %s)",
 					q.Name, q.Type,
 				))
+			} else if len(dns.Answers) > 0 {
+				writeLine(fmt.Sprintf("L5 (DNS): Ответ (ID: %d)", dns.ID))
 			}
 		}
 		// Payload прикладного уровня (например HTTP, TLS, RAW данные)
@@ -402,7 +424,7 @@ func printFrame(packet gopacket.Packet, count int) {
 	}
 
 	writeLine("----------------------------------------------------")
-	writeLine("Полный кадр в hex (как на проводе):")
+	writeLine("Полный кадр в hex :")
 	hexDump(data)
 	writeLine("")
 }
@@ -438,9 +460,13 @@ func getTCPFlags(tcp *layers.TCP) string {
 }
 
 // hexDump: Выводит hex-дамп байтов в стиле Wireshark (с offset, префиксами, hex и ASCII).
-// Префиксы: Dst/Src/Type для первых строк (MAC/EtherType).
 func hexDump(data []byte) {
 	const bytesPerLine = 16
+	// Полезный контекст для новичка:
+	// 0x00-0x05: MAC-адрес получателя (Dst)
+	// 0x06-0x0B: MAC-адрес отправителя (Src)
+	// 0x0C-0x0D: EtherType (тип протокола вышележащего уровня, например IPv4: 0x0800)
+
 	for i := 0; i < len(data); i += bytesPerLine {
 		end := int(math.Min(float64(i+bytesPerLine), float64(len(data))))
 		line := data[i:end]
@@ -453,14 +479,15 @@ func hexDump(data []byte) {
 			} else {
 				ascii += "."
 			}
-			if j == 7 {
+			if j == 7 { // Двойной пробел между 8-м и 9-м байтом для лучшей читаемости
 				hex += " "
 			}
 		}
-		// Выравнивание hex до 49 символов (16*3=48 + пробелы)
+		// Выравнивание hex
 		for len(hex) < 49 {
 			hex += "  "
 		}
+
 		// Префиксы для первых строк (как в Wireshark)
 		prefix := ""
 		if i == 0 {
@@ -470,7 +497,7 @@ func hexDump(data []byte) {
 		} else if i == 12 {
 			prefix = "Type"
 		}
-		offsetStr := fmt.Sprintf("0x%02X", i)
+		offsetStr := fmt.Sprintf("0x%04X", i) // Используем 4 цифры для смещения для единообразия
 		writeLine(fmt.Sprintf("%s %s%s %s", offsetStr, prefix, hex, ascii))
 	}
 }
@@ -478,10 +505,11 @@ func hexDump(data []byte) {
 // writeLine: Вспомогательная функция для записи в консоль и файл (с синхронизацией).
 func writeLine(s string) {
 	fmt.Println(s)
+	// В проде нужно добавить более надежную обработку ошибок, но для простоты игнорируем.
 	if _, err := outputFile.WriteString(s + "\n"); err != nil {
-		// Игнорируем ошибки записи для простоты (в проде — логируй)
+		// Log error if writing fails
 	}
 	if err := outputFile.Sync(); err != nil {
-		// Игнорируем Sync-ошибки
+		// Log error if sync fails
 	}
 }
