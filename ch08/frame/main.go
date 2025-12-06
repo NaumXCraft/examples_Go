@@ -459,6 +459,7 @@ func getTCPFlags(tcp *layers.TCP) string {
 }
 
 // hexDump: Выводит hex-дамп байтов в стиле Wireshark (с offset, префиксами, hex и ASCII).
+// hexDump: Выводит hex-дамп байтов в стиле Wireshark (с offset, префиксами, hex и ASCII).
 func hexDump(data []byte) {
 	const bytesPerLine = 16
 	// Полезный контекст для новичка:
@@ -485,18 +486,18 @@ func hexDump(data []byte) {
 				ascii += "."
 			}
 
-			// как Wireshark: двойной пробел между 8-м и 9-м байтом
 			if j == 7 {
 				hexCols += " "
 			}
 		}
 
-		// Выравнивание под ASCII
 		for len(hexCols) < 49 {
 			hexCols += " "
 		}
 
-		offsetStr := fmt.Sprintf("0x%04X", i)
+		//offset теперь 0x00 (2 hex-цифры)
+		offsetStr := fmt.Sprintf("0x%02X", i)
+
 		writeLine(fmt.Sprintf("%s %s%s", offsetStr, hexCols, ascii))
 	}
 }
@@ -504,7 +505,7 @@ func hexDump(data []byte) {
 // writeLine: Вспомогательная функция для записи в консоль и файл (с синхронизацией).
 func writeLine(s string) {
 	fmt.Println(s)
-	// В проде нужно добавить более надежную обработку ошибок, но для простоты игнорируем.
+	// TODO: добавить более надежную обработку ошибок.
 	if _, err := outputFile.WriteString(s + "\n"); err != nil {
 		// Log error if writing fails
 	}
