@@ -27,7 +27,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -468,37 +467,37 @@ func hexDump(data []byte) {
 	// 0x0C-0x0D: EtherType (тип протокола вышележащего уровня, например IPv4: 0x0800)
 
 	for i := 0; i < len(data); i += bytesPerLine {
-		end := int(math.Min(float64(i+bytesPerLine), float64(len(data))))
+		end := i + bytesPerLine
+		if end > len(data) {
+			end = len(data)
+		}
+
 		line := data[i:end]
-		hex := ""
+		hexCols := ""
 		ascii := ""
+
 		for j, b := range line {
-			hex += fmt.Sprintf("%02X ", b)
+			hexCols += fmt.Sprintf("%02X ", b)
+
 			if b >= 32 && b <= 126 {
 				ascii += string(b)
 			} else {
 				ascii += "."
 			}
-			if j == 7 { // Двойной пробел между 8-м и 9-м байтом для лучшей читаемости
-				hex += " "
+
+			// как Wireshark: двойной пробел между 8-м и 9-м байтом
+			if j == 7 {
+				hexCols += " "
 			}
 		}
-		// Выравнивание hex
-		for len(hex) < 49 {
-			hex += "  "
+
+		// Выравнивание под ASCII
+		for len(hexCols) < 49 {
+			hexCols += " "
 		}
 
-		// Префиксы для первых строк (как в Wireshark)
-		prefix := ""
-		if i == 0 {
-			prefix = "Dst "
-		} else if i == 6 {
-			prefix = "Src "
-		} else if i == 12 {
-			prefix = "Type"
-		}
-		offsetStr := fmt.Sprintf("0x%04X", i) // Используем 4 цифры для смещения для единообразия
-		writeLine(fmt.Sprintf("%s %s%s %s", offsetStr, prefix, hex, ascii))
+		offsetStr := fmt.Sprintf("0x%04X", i)
+		writeLine(fmt.Sprintf("%s %s%s", offsetStr, hexCols, ascii))
 	}
 }
 
