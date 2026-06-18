@@ -6,11 +6,10 @@
 - ch03 "Examples"
 - ch04 File Box
 - ch05 WebCMD
-- ch06 Shop Cart
+- ch06 shopping cart (console + API)
 - ch07 Mini Chat
 - ch08 Computer Networks (Go + Wireshark)
 - ch09 goPuTTY
-- ch10 Shop Cart
 
 
 
