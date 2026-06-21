@@ -1,7 +1,9 @@
+// Точка входа: создаём сервис, подключаем хендлеры, запускаем сервер.
 package main
 
 import (
 	"log"
+
 	"todo-api/handler"
 	"todo-api/service"
 
@@ -9,8 +11,8 @@ import (
 )
 
 func main() {
-	svc := service.New(0) // 0 = без ограничений
-	h := handler.NewTodoHandler(svc)
+	svc := service.New()
+	h := handler.New(svc)
 
 	r := gin.Default()
 

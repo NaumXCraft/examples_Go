@@ -1,3 +1,7 @@
+// Package service содержит бизнес-логику: хранение задач и операции над ними.
+// Никакого HTTP здесь нет — этот пакет ничего не знает о Gin или JSON.
+// Это и есть смысл архитектуры: handler работает с веб-запросами,
+// service работает с самими задачами.
 package service
 
 import (
@@ -5,156 +9,151 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"todo-api/models"
 )
 
-// Sentinel-ошибки — удобно проверять через errors.Is().
-var (
-	ErrNotFound     = errors.New("not found")
-	ErrTitleEmpty   = errors.New("title required")
-	ErrLimitReached = errors.New("limit reached")
-)
-
-// CreateInput — входные данные для создания задачи.
-type CreateInput struct {
-	Title string
-	Body  string
-}
-
-// UpdateInput — поля обновления (nil = не трогать поле).
-type UpdateInput struct {
-	Title *string
-	Body  *string
-}
-
-// TodoService хранит задачи в памяти и управляет ими.
+// TodoService хранит задачи в памяти и предоставляет методы для работы с ними.
+//
+// Поля:
+//   - items  — сами задачи, ключ map это ID
+//   - nextID — следующий свободный ID (растёт с каждой новой задачей)
+//   - mu     — мьютекс. Защищает items и nextID, если несколько запросов
+//     придут одновременно (Gin обрабатывает запросы в разных горутинах).
 type TodoService struct {
 	mu     sync.Mutex
 	items  map[int64]models.Todo
 	nextID int64
-	limit  int // 0 = без ограничений
 }
 
-func New(limit int) *TodoService {
+// New создаёт пустой сервис, готовый к работе.
+func New() *TodoService {
 	return &TodoService{
 		items:  make(map[int64]models.Todo),
 		nextID: 1,
-		limit:  limit,
 	}
 }
 
-// Add создаёт новую задачу и возвращает её.
-func (s *TodoService) Add(in CreateInput) (models.Todo, error) {
-	title := strings.TrimSpace(in.Title)
+// Add создаёт новую задачу.
+// title — обязателен (после обрезки пробелов не должен быть пустым).
+// body  — опционален.
+func (s *TodoService) Add(title, body string) (models.Todo, error) {
+	title = strings.TrimSpace(title)
 	if title == "" {
-		return models.Todo{}, ErrTitleEmpty
+		return models.Todo{}, errors.New("title required")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.limit > 0 && len(s.items) >= s.limit {
-		return models.Todo{}, ErrLimitReached
-	}
-
 	now := time.Now().UTC()
-	t := models.Todo{
+	todo := models.Todo{
 		ID:        s.nextID,
 		Title:     title,
-		Body:      strings.TrimSpace(in.Body),
+		Body:      strings.TrimSpace(body),
 		Done:      false,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	s.items[s.nextID] = t
+
+	s.items[s.nextID] = todo
 	s.nextID++
-	return t, nil
+
+	return todo, nil
 }
 
-// Get возвращает задачу по ID.
+// Get возвращает задачу по ID или ошибку "not found".
 func (s *TodoService) Get(id int64) (models.Todo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.items[id]
+
+	todo, ok := s.items[id]
 	if !ok {
-		return models.Todo{}, ErrNotFound
+		return models.Todo{}, errors.New("not found")
 	}
-	return t, nil
+	return todo, nil
 }
 
-// List возвращает все задачи; doneFilter == nil → все.
-func (s *TodoService) List(doneFilter *bool) []models.Todo {
+// List возвращает задачи.
+// filter == nil  → вернуть все задачи
+// *filter == true  → только выполненные (done = true)
+// *filter == false → только невыполненные (done = false)
+func (s *TodoService) List(filter *bool) []models.Todo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]models.Todo, 0, len(s.items))
-	for _, t := range s.items {
-		if doneFilter != nil && t.Done != *doneFilter {
+
+	result := []models.Todo{} // не nil — чтобы в JSON всегда был [], а не null
+	for _, todo := range s.items {
+		if filter != nil && todo.Done != *filter {
 			continue
 		}
-		out = append(out, t)
+		result = append(result, todo)
 	}
-	return out
+	return result
 }
 
-// Update изменяет title/body задачи (nil = не трогать).
-func (s *TodoService) Update(id int64, in UpdateInput) (models.Todo, error) {
+// Update меняет title и/или body существующей задачи.
+// nil-параметр означает "не менять это поле".
+func (s *TodoService) Update(id int64, title, body *string) (models.Todo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	t, ok := s.items[id]
+	todo, ok := s.items[id]
 	if !ok {
-		return models.Todo{}, ErrNotFound
+		return models.Todo{}, errors.New("not found")
 	}
 
-	changed := false
-	if in.Title != nil {
-		nt := strings.TrimSpace(*in.Title)
-		if nt == "" {
-			return models.Todo{}, ErrTitleEmpty
+	if title != nil {
+		newTitle := strings.TrimSpace(*title)
+		if newTitle == "" {
+			return models.Todo{}, errors.New("title required")
 		}
-		t.Title = nt
-		changed = true
+		todo.Title = newTitle
 	}
-	if in.Body != nil {
-		t.Body = strings.TrimSpace(*in.Body)
-		changed = true
+	if body != nil {
+		todo.Body = strings.TrimSpace(*body)
 	}
-	if changed {
-		t.UpdatedAt = time.Now().UTC()
-		s.items[id] = t
-	}
-	return t, nil
+
+	todo.UpdatedAt = time.Now().UTC()
+	s.items[id] = todo
+
+	return todo, nil
 }
 
 // Delete удаляет задачу по ID.
 func (s *TodoService) Delete(id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.items[id]; !ok {
-		return ErrNotFound
+		return errors.New("not found")
 	}
 	delete(s.items, id)
 	return nil
 }
 
-// Toggle переключает Done.
+// Toggle переключает статус Done: false → true → false → ...
 func (s *TodoService) Toggle(id int64) (models.Todo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.items[id]
+
+	todo, ok := s.items[id]
 	if !ok {
-		return models.Todo{}, ErrNotFound
+		return models.Todo{}, errors.New("not found")
 	}
-	t.Done = !t.Done
-	t.UpdatedAt = time.Now().UTC()
-	s.items[id] = t
-	return t, nil
+
+	todo.Done = !todo.Done
+	todo.UpdatedAt = time.Now().UTC()
+	s.items[id] = todo
+
+	return todo, nil
 }
 
-// Clear удаляет все задачи и сбрасывает счётчик ID.
+// Clear удаляет все задачи и сбрасывает счётчик ID обратно на 1.
 func (s *TodoService) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.items = make(map[int64]models.Todo)
 	s.nextID = 1
 }
