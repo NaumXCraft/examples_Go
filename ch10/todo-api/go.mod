@@ -1,4 +1,4 @@
-module todo-api
+module src
 
 go 1.25.0
 
