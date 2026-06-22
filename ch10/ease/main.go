@@ -12,7 +12,9 @@ import (
 
 // ==================== МОДЕЛЬ ====================
 
-// Todo — одна задача.
+// Todo — одна задача в нашем списке.
+// Теги `json:"..."` говорят Go, как называть поля в JSON-ответе.
+// omitempty = не включать поле, если оно пустое.
 type Todo struct {
 	ID        int64     `json:"id"`
 	Title     string    `json:"title"`
@@ -22,27 +24,26 @@ type Todo struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// ==================== ХРАНИЛИЩЕ (in-memory) ====================
+// ==================== ХРАНИЛИЩЕ ====================
 
-// Всё состояние приложения — здесь. Никаких отдельных пакетов:
-// это маленький проект, и так гораздо проще понять, что происходит.
+// Всё состояние живёт в этих трёх переменных.
+// В реальном проекте здесь была бы БД, но для обучения in-memory проще.
 var (
-	todos  = make(map[int64]Todo)
-	nextID = int64(1)
-	mu     sync.Mutex // защищает todos и nextID от гонок при параллельных запросах
+	todos  = make(map[int64]Todo) // map[id]Todo — быстрый поиск по ID
+	nextID = int64(1)             // автоинкремент
+	mu     sync.Mutex             // мьютекс: защищает от гонок при параллельных запросах
 )
 
-// ---- функции работы с хранилищем ----
-
-// addTodo создаёт новую задачу.
+// addTodo создаёт задачу и кладёт в map.
 func addTodo(title, body string) (Todo, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return Todo{}, errors.New("title required")
 	}
 
+	// Lock/Unlock гарантируют, что только один горутин меняет данные за раз.
 	mu.Lock()
-	defer mu.Unlock()
+	defer mu.Unlock() // defer = выполнится при выходе из функции, даже при панике
 
 	now := time.Now().UTC()
 	t := Todo{
@@ -59,6 +60,7 @@ func addTodo(title, body string) (Todo, error) {
 }
 
 // getTodo ищет задачу по ID.
+// Второй возврат map-а (ok bool) показывает, нашли ли ключ.
 func getTodo(id int64) (Todo, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -70,8 +72,8 @@ func getTodo(id int64) (Todo, error) {
 	return t, nil
 }
 
-// listTodos возвращает все задачи, либо отфильтрованные по done.
-// filter == nil → вернуть все.
+// listTodos отдаёт все задачи или только с нужным статусом done.
+// filter == nil означает «без фильтра» — указатель удобнее, чем отдельный флаг.
 func listTodos(filter *bool) []Todo {
 	mu.Lock()
 	defer mu.Unlock()
@@ -79,14 +81,15 @@ func listTodos(filter *bool) []Todo {
 	result := []Todo{}
 	for _, t := range todos {
 		if filter != nil && t.Done != *filter {
-			continue
+			continue // пропустить, если не подходит по фильтру
 		}
 		result = append(result, t)
 	}
 	return result
 }
 
-// updateTodo меняет title и/или body. nil-поле = не трогать.
+// updateTodo меняет title и/или body.
+// Принимаем *string, а не string: nil = «не трогать это поле».
 func updateTodo(id int64, title, body *string) (Todo, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -97,7 +100,7 @@ func updateTodo(id int64, title, body *string) (Todo, error) {
 	}
 
 	if title != nil {
-		newTitle := strings.TrimSpace(*title)
+		newTitle := strings.TrimSpace(*title) // *title = разыменование указателя
 		if newTitle == "" {
 			return Todo{}, errors.New("title required")
 		}
@@ -108,11 +111,11 @@ func updateTodo(id int64, title, body *string) (Todo, error) {
 	}
 	t.UpdatedAt = time.Now().UTC()
 
-	todos[id] = t
+	todos[id] = t // map хранит копии, поэтому нужно положить обратно
 	return t, nil
 }
 
-// deleteTodo удаляет задачу по ID.
+// deleteTodo удаляет задачу. Возвращает ошибку, если не нашли.
 func deleteTodo(id int64) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -120,11 +123,11 @@ func deleteTodo(id int64) error {
 	if _, ok := todos[id]; !ok {
 		return errors.New("not found")
 	}
-	delete(todos, id)
+	delete(todos, id) // встроенная функция Go для удаления из map
 	return nil
 }
 
-// toggleTodo переключает Done (true ↔ false).
+// toggleTodo переключает Done: true → false, false → true.
 func toggleTodo(id int64) (Todo, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -139,7 +142,7 @@ func toggleTodo(id int64) (Todo, error) {
 	return t, nil
 }
 
-// clearTodos удаляет все задачи и сбрасывает счётчик ID.
+// clearTodos сбрасывает всё хранилище — удобно для тестов.
 func clearTodos() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -147,10 +150,11 @@ func clearTodos() {
 	nextID = 1
 }
 
-// ==================== HTTP-ХЕНДЛЕРЫ ====================
+// ==================== ХЕНДЛЕРЫ ====================
 
-// POST /todos
-// body: { "title": "...", "body": "..." }
+// handleCreate — POST /todos
+// ShouldBindJSON читает тело запроса и кладёт в структуру.
+// binding:"required" вернёт 400, если поле отсутствует.
 func handleCreate(c *gin.Context) {
 	var input struct {
 		Title string `json:"title" binding:"required"`
@@ -166,10 +170,11 @@ func handleCreate(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(201, todo)
+	c.JSON(201, todo) // 201 Created — стандарт для успешного POST
 }
 
-// GET /todos?done=1|0
+// handleList — GET /todos?done=1|0
+// Query-параметр done опциональный: без него вернём все задачи.
 func handleList(c *gin.Context) {
 	var filter *bool
 
@@ -181,7 +186,7 @@ func handleList(c *gin.Context) {
 		v := false
 		filter = &v
 	case "":
-		// без фильтра — показываем все
+		// нет параметра — filter остаётся nil, покажем всё
 	default:
 		c.JSON(400, gin.H{"error": "done must be 1|0|true|false"})
 		return
@@ -191,7 +196,7 @@ func handleList(c *gin.Context) {
 	c.JSON(200, gin.H{"count": len(items), "items": items})
 }
 
-// GET /todos/:id
+// handleGet — GET /todos/:id
 func handleGet(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -207,8 +212,8 @@ func handleGet(c *gin.Context) {
 	c.JSON(200, todo)
 }
 
-// PUT /todos/:id
-// body: { "title": "...", "body": "..." }  (оба поля опциональны)
+// handleUpdate — PUT /todos/:id
+// Оба поля опциональны: *string в структуре = nil, если клиент не прислал поле.
 func handleUpdate(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -217,7 +222,7 @@ func handleUpdate(c *gin.Context) {
 	}
 
 	var input struct {
-		Title *string `json:"title"`
+		Title *string `json:"title"` // *string: nil если не пришло
 		Body  *string `json:"body"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -227,6 +232,7 @@ func handleUpdate(c *gin.Context) {
 
 	todo, err := updateTodo(id, input.Title, input.Body)
 	if err != nil {
+		// Разные ошибки → разные HTTP-статусы
 		if err.Error() == "not found" {
 			c.JSON(404, gin.H{"error": err.Error()})
 		} else {
@@ -237,7 +243,8 @@ func handleUpdate(c *gin.Context) {
 	c.JSON(200, todo)
 }
 
-// DELETE /todos/:id
+// handleDelete — DELETE /todos/:id
+// 204 No Content: успех, но тело ответа пустое (так принято для DELETE).
 func handleDelete(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -252,7 +259,7 @@ func handleDelete(c *gin.Context) {
 	c.Status(204)
 }
 
-// POST /todos/:id/toggle
+// handleToggle — POST /todos/:id/toggle
 func handleToggle(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -268,13 +275,14 @@ func handleToggle(c *gin.Context) {
 	c.JSON(200, todo)
 }
 
-// POST /todos/clear
+// handleClear — POST /todos/clear
 func handleClear(c *gin.Context) {
 	clearTodos()
 	c.JSON(200, gin.H{"message": "cleared"})
 }
 
-// parseID достаёт :id из URL и переводит в int64.
+// parseID достаёт :id из URL и конвертирует в int64.
+// ShouldBindUri читает URL-параметры в структуру — аналог ShouldBindJSON для пути.
 func parseID(c *gin.Context) (int64, error) {
 	var uri struct {
 		ID int64 `uri:"id" binding:"required"`
@@ -288,8 +296,11 @@ func parseID(c *gin.Context) (int64, error) {
 // ==================== MAIN ====================
 
 func main() {
-	r := gin.Default()
+	r := gin.Default() // Default = логгер + recovery (не падает при панике)
 
+	// Маршруты сгруппированы по ресурсу.
+	// Важно: /todos/clear должен быть ВЫШЕ /todos/:id,
+	// иначе Gin воспримет "clear" как id.
 	r.POST("/todos", handleCreate)
 	r.GET("/todos", handleList)
 	r.GET("/todos/:id", handleGet)
@@ -298,5 +309,5 @@ func main() {
 	r.POST("/todos/:id/toggle", handleToggle)
 	r.POST("/todos/clear", handleClear)
 
-	log.Fatal(r.Run(":8080"))
+	log.Fatal(r.Run(":8080")) // log.Fatal = напечатает ошибку и завершит процесс
 }
