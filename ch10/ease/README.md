@@ -234,35 +234,96 @@ go run main.go
 
 ## Примеры curl
 
-```bash
+```
 # Создать
-curl -s -X POST http://localhost:8080/todos \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Buy milk","body":"2 liters"}' | jq
+$body = '{"title":"Buy milk","body":"2 liters"}'
+curl.exe -s -X POST http://localhost:8080/todos -H "Content-Type: application/json" -d $body | ConvertFrom-Json
 
 # Список всех
-curl -s http://localhost:8080/todos | jq
+curl.exe -s http://localhost:8080/todos | ConvertFrom-Json
 
 # Только невыполненные
-curl -s "http://localhost:8080/todos?done=0" | jq
+curl.exe -s "http://localhost:8080/todos?done=0" | ConvertFrom-Json
 
 # Одна задача
-curl -s http://localhost:8080/todos/1 | jq
+curl.exe -s http://localhost:8080/todos/1 | ConvertFrom-Json
 
 # Обновить
-curl -s -X PUT http://localhost:8080/todos/1 \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Buy bread"}' | jq
+$body = '{"title":"Buy bread"}'
+curl.exe -s -X PUT http://localhost:8080/todos/1 -H "Content-Type: application/json" -d $body | ConvertFrom-Json
 
 # Переключить done
-curl -s -X POST http://localhost:8080/todos/1/toggle | jq
+curl.exe -s -X POST http://localhost:8080/todos/1/toggle | ConvertFrom-Json
 
 # Удалить
-curl -s -X DELETE http://localhost:8080/todos/1
+curl.exe -s -X DELETE http://localhost:8080/todos/1
 
 # Очистить всё
-curl -s -X POST http://localhost:8080/todos/clear | jq
+curl.exe -s -X POST http://localhost:8080/todos/clear | ConvertFrom-Json
 ```
+
+### запросы в Postman:
+
+---
+
+**Создать**
+- Method: `POST`
+- URL: `http://localhost:8080/todos`
+- Body → raw → JSON:
+```json
+{"title":"Buy milk","body":"2 liters"}
+```
+
+---
+
+**Список всех**
+- Method: `GET`
+- URL: `http://localhost:8080/todos`
+
+---
+
+**Только невыполненные**
+- Method: `GET`
+- URL: `http://localhost:8080/todos?done=0`
+
+---
+
+**Одна задача**
+- Method: `GET`
+- URL: `http://localhost:8080/todos/1`
+
+---
+
+**Обновить**
+- Method: `PUT`
+- URL: `http://localhost:8080/todos/1`
+- Body → raw → JSON:
+```json
+{"title":"Buy bread"}
+```
+
+---
+
+**Переключить done**
+- Method: `POST`
+- URL: `http://localhost:8080/todos/1/toggle`
+
+---
+
+**Удалить**
+- Method: `DELETE`
+- URL: `http://localhost:8080/todos/1`
+
+---
+
+**Очистить всё**
+- Method: `POST`
+- URL: `http://localhost:8080/todos/clear`
+
+---
+
+Для всех запросов с Body не забудь выставить заголовок `Content-Type: application/json` — или просто выбери **raw → JSON** в Postman, он добавит его автоматически.
+
 
 ---
 
